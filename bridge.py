@@ -93,8 +93,24 @@ class MatrixBot:
                     }
                 )
 
+
+            # --- 3.1. CONTEXT STUFFING ---
+            # Get the conversation so far
+            history_text = await self.get_thread_history(room.room_id, thread_root_id)
+            
+            # Combine History + Current Request
+            # We wrap it clearly so the LLM knows what is past vs present
+            full_context_prompt = f"""
+            PREVIOUS CONVERSATION HISTORY:
+            {history_text}
+            
+            CURRENT USER REQUEST:
+            {event.body}
+            """
+
             # --- 4. RUN THE BRAIN ---
-            final_response = await run_agent_logic(event.body, log_callback=log_to_thread)
+            # We pass the FULL context now, not just event.body
+            final_response = await run_agent_logic(full_context_prompt, log_callback=log_to_thread)
 
             # --- 5. SEND FINAL ANSWER ---
             # We send this to the SAME thread (keeping it organized)
@@ -112,7 +128,41 @@ class MatrixBot:
             )
             
         finally:
-            await self.client.room_typing(room.room_id, False)        
+            await self.client.room_typing(room.room_id, False)
+
+    async def get_thread_history(self, room_id, thread_root_id, limit=30):
+        """
+        Fetches recent room messages and filters for the specific thread.
+        Returns a formatted string of the conversation.
+        """
+        # Fetch the last 'limit' messages from the room
+        # Note: In a busy room, you might need a higher limit or proper pagination.
+        response = await self.client.room_messages(room_id, limit=limit)
+        
+        if not response.chunk:
+            return ""
+
+        # Filter: Keep if it IS the root, or if it RELATES to the root
+        thread_events = []
+        for event in response.chunk:
+            if not isinstance(event, RoomMessageText):
+                continue
+                
+            event_id = event.event_id
+            relates_to = event.source.get('content', {}).get('m.relates_to', {})
+            parent_id = relates_to.get('event_id')
+            
+            # Check strictly for this thread
+            if event_id == thread_root_id or parent_id == thread_root_id:
+                sender = "AI" if event.sender == self.client.user_id else "User"
+                # Skip "Thinking..." log messages (optional, keeps context clean)
+                if "⚙️" in event.body:
+                    continue
+                thread_events.append(f"{sender}: {event.body}")
+
+        # Matrix returns newest first, so we reverse to read chronologically
+        thread_events.reverse()
+        return "\n".join(thread_events)
 
 if __name__ == "__main__":
     bot = MatrixBot()
