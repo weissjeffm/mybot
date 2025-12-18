@@ -1,10 +1,11 @@
 import inspect
-from . import ssh, ipmi # basic # Import your tool modules
+from . import ssh, ipmi, scrape # basic # Import your tool modules
 
 # 1. Register your tools here
 REGISTRY = {
     "run_cmd": ssh.run_remote_cmd,
     "check_temps": ipmi.check_temps,
+    "scrape_webpage": scrape.scrape_url
     # "uptime": basic.get_uptime 
 }
 
