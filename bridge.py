@@ -172,18 +172,34 @@ class MatrixBot:
             event_id = event.event_id
             relates_to = event.source.get('content', {}).get('m.relates_to', {})
             parent_id = relates_to.get('event_id')
+
+            if event.sender == self.client.user_id:
+                sender_name = "AI_Agent"
+            else:
+                sender_name = await self.get_display_name(event.sender)
             
-            # Check strictly for this thread
-            if event_id == thread_root_id or parent_id == thread_root_id:
-                sender = "AI" if event.sender == self.client.user_id else "User"
-                # Skip "Thinking..." log messages (optional, keeps context clean)
-                if "⚙️" in event.body:
-                    continue
-                thread_events.append(f"{sender}: {event.body}")
+            thread_events.append(f"{sender_name}: {event.body}")
 
         # Matrix returns newest first, so we reverse to read chronologically
         thread_events.reverse()
         return "\n".join(thread_events)
+
+    # Add a simple cache
+    self.user_cache = {} 
+
+    async def get_display_name(self, user_id):
+        """Resolves a User ID to a human-readable Display Name."""
+        if user_id in self.user_cache:
+            return self.user_cache[user_id]
+            
+        try:
+            # Fetch from server
+            response = await self.client.get_displayname(user_id)
+            displayname = response.displayname if response.displayname else user_id
+            self.user_cache[user_id] = displayname
+            return displayname
+        except Exception:
+            return user_id # Fallback
 
 if __name__ == "__main__":
     bot = MatrixBot()
