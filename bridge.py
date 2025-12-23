@@ -4,6 +4,7 @@ import signal
 import sys
 from nio import AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent
 from langgraph_agent import run_agent_logic 
+import markdown
 
 # Config
 MATRIX_URL = os.getenv("MATRIX_URL", "https://matrix.org")
@@ -12,7 +13,19 @@ MATRIX_PASS = os.getenv("MATRIX_PASS", "password")
 
 class MatrixBot:
     def __init__(self):
-        self.client = AsyncClient(MATRIX_URL, MATRIX_USER)
+        # We MUST provide a store_path. 
+        # The bot will create a SQLite DB here to store encryption keys.
+        # This folder MUST be persistent (backed up).
+        store_folder = "./crypto_store" 
+        if not os.path.exists(store_folder):
+            os.makedirs(store_folder)
+
+        self.client = AsyncClient(
+            MATRIX_URL, 
+            MATRIX_USER, 
+            store_path=store_folder
+        )
+        
 
     async def start(self):
         print(f"Logging in as {MATRIX_USER}...")
@@ -112,6 +125,12 @@ class MatrixBot:
             # We pass the FULL context now, not just event.body
             final_response = await run_agent_logic(full_context_prompt, log_callback=log_to_thread)
 
+            # Convert model's Markdown to HTML
+            # 'tables' and 'fenced_code' are essential for tech/coding questions
+            html_response = markdown.markdown(
+                final_response, 
+                extensions=['tables', 'fenced_code', 'nl2br']
+            )
             # --- 5. SEND FINAL ANSWER ---
             # We send this to the SAME thread (keeping it organized)
             await self.client.room_send(
@@ -119,7 +138,9 @@ class MatrixBot:
                 message_type="m.room.message",
                 content={
                     "msgtype": "m.text",
-                    "body": final_response,
+                    "body": final_response,             # Plain text (fallback)
+                    "format": "org.matrix.custom.html", # Trigger HTML rendering
+                    "formatted_body": html_response,    # The HTML payload
                     "m.relates_to": {
                         "rel_type": "m.thread",
                         "event_id": thread_root_id,

@@ -12,7 +12,7 @@ llm = ChatOpenAI(
     api_key="sk-50cf096cc7c795865e",
     model="qwen3-235b-a22b-instruct-2507", # Match your LocalAI model name
     temperature=0,
-    max_tokens=1024
+    max_tokens=102400
 )
 
 # --- 2. THE TOOLS ---
