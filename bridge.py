@@ -136,7 +136,7 @@ class MatrixBot:
 
         # Clean the prompt (remove bot name)
         clean_body = event.body.replace(self.client.user_id, "").replace("weissbot", "", 1).strip()
-
+        sender_name = await self.get_display_name(event.sender)
         # check if the user is just trying to verify via the matrix protocol
         if clean_body == "!verify":
             print(f"🔐 Initiating verification with {sender_name} ({event.sender})...")
@@ -149,7 +149,7 @@ class MatrixBot:
             await self.client.key_verifications.request(event.sender, ["m.sas.v1"])
             return 
 
-        sender_name = await self.get_display_name(event.sender)
+        
         print(f"Processing request from {sender_name}: {clean_body}")
 
         # --- 2. DETERMINE ROOT ---
