@@ -5,8 +5,7 @@ def signal_topic_change(subject: str):
     significantly. The purpose is to automatically file different
     discussions into different threads, so the user doesn't have to
     remember to do it manually. All you have to do is call this
-    function when the user changes the subject, the orchestration
-    program does the rest.
+    function, the orchestration program does the rest.
 
     Args: subject: A 3-6 word title
     for the new topic (e.g. "Server Disk Space").
