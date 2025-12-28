@@ -33,7 +33,7 @@ class MatrixBot:
         )
 
 
-async def start(self):
+    async def start(self):
         print(f"Logging in as {MATRIX_USER}...")
         await self.client.login(MATRIX_PASS)
         
