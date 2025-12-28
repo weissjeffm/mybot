@@ -7,7 +7,7 @@ from langgraph_agent import run_agent_logic
 
 from nio import (
     AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent,
-    KeyVerificationStart, KeyVerificationCancel, KeyVerificationKey, 
+    KeyVerificationRequest, KeyVerificationStart, KeyVerificationCancel, KeyVerificationKey, 
     KeyVerificationMac, LocalProtocolError
 )
 # Config
@@ -42,6 +42,7 @@ class MatrixBot:
                 self.client.next_batch = f.read().strip()
 
         # --- STANDARD CALLBACKS ---
+        self.client.add_to_device_callback(self.cb_verification_request, KeyVerificationRequest)
         self.client.add_event_callback(self.message_callback, RoomMessageText)
         self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
         
@@ -185,10 +186,10 @@ class MatrixBot:
                             state["current_root"] = new_header.event_id
                             print(f"Topic Switch! New Root: {state['current_root']}")
                             return 
-                            
+                        
                     except Exception as e:
                         print(f"DEBUG: Error handling topic change: {e}")
-                # NORMAL LOGGING (Gray Box)
+                        # NORMAL LOGGING (Gray Box)
                 html_log = f"<blockquote><font color='gray'>⚙️ {text}</font></blockquote>"
                 await self.client.room_send(
                     room_id=room.room_id,
@@ -243,7 +244,23 @@ CURRENT REQUEST FROM {sender_name}:
             await self.client.room_typing(room.room_id, False)
 
     # --- ENCRYPTION HELPERS ---
+    async def cb_verification_request(self, event: KeyVerificationRequest):
+        """0. Handle the initial 'Can we verify?' request."""
+        print(f"🔐 Received verification REQUEST from {event.sender}. Sending READY.")
 
+        # We reply: "Yes, I support SAS (Emoji) verification."
+        # This triggers Element to show you the 'Start' button or auto-proceed.
+        await self.client.to_device(
+            "m.key.verification.ready",
+            {
+                "transaction_id": event.transaction_id,
+                "from_device": self.client.device_id,
+                "methods": ["m.sas.v1"]
+            },
+            to_user_id=event.sender,
+            to_device_id=event.source_device
+        )
+        
     async def cb_verification_start(self, event: KeyVerificationStart):
         """1. Receive request and accept it."""
         print(f"🔐 Verification started by {event.sender}. Accepting...")
