@@ -7,6 +7,7 @@ REGISTRY = {
     "check_temps": ipmi.check_temps,
     "scrape_webpage": scrape.scrape_url,
     "search": search.search_web
+    "topic": topic.signal_topic_change
     # "uptime": basic.get_uptime 
 }
 
