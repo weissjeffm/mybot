@@ -38,6 +38,7 @@ class MatrixBot:
     async def start(self):
         print(f"Logging in as {MATRIX_USER}...")
         await self.client.login(MATRIX_PASS)
+        print(f"🤖 MY DEVICE ID: {self.client.device_id}")
         
         if os.path.exists("next_batch"):
             with open("next_batch", "r") as f:
@@ -135,6 +136,19 @@ class MatrixBot:
 
         # Clean the prompt (remove bot name)
         clean_body = event.body.replace(self.client.user_id, "").replace("weissbot", "", 1).strip()
+
+        # check if the user is just trying to verify via the matrix protocol
+        if clean_body == "!verify":
+            print(f"🔐 Initiating verification with {sender_name} ({event.sender})...")
+            await self.client.room_send(
+                room.room_id, 
+                "m.room.message", 
+                {"body": "🔐 Sending verification request... Check your popup!", "msgtype": "m.text"}
+            )
+            # This sends a "To-Device" request to YOUR specific device
+            await self.client.key_verifications.request(event.sender, ["m.sas.v1"])
+            return 
+
         sender_name = await self.get_display_name(event.sender)
         print(f"Processing request from {sender_name}: {clean_body}")
 
