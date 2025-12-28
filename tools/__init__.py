@@ -1,5 +1,5 @@
 import inspect
-from . import ssh, ipmi, scrape, search, topic  # basic # Import your tool modules
+from . import ssh, ipmi, scrape, search, topic  # Import tool modules
 
 # 1. Register your tools here
 REGISTRY = {
@@ -17,7 +17,7 @@ def generate_system_prompt():
     """
     Dynamically builds the instructions based on the REGISTRY.
     """
-    prompt = "You are an Autonomous Agent.\n"
+    prompt = "You are an autonomous research assistant.\n"
     prompt += "You have access to the following tools:\n\n"
     
     for name, func in REGISTRY.items():
@@ -29,14 +29,20 @@ def generate_system_prompt():
         prompt += f"- {name}{sig}: {doc}\n"
     
     prompt += "\nTo use a tool, reply with: Action: tool_name(arg1, arg2='val')\n"
-    prompt += """ Never guess URLs to scrape. use 'search' tool as a
-    first step in doing research. Find the most relevant links using
-    the search result summary, then use the scrape_webpage tool to get
-    the page contents. Limit search calls to 3, and scrape_webpage calls to 10.
+    prompt += """Use 'search' tool as a first step in doing
+    research. Find the most relevant links using the search result
+    summary, then use the scrape_webpage tool to get the page
+    contents.
 
-    Include references in your responses where possible. At the end of
-    a paragraph where you're referring to scraped content, append a
-    properly formatted link that matches the scraped URL.
-    """
+    If asked to do deep research, use these limits:
+    searches: 15, webpage fetches: 30.
+
+    Otherwise use these limits:
+    searches: 5, webpage fetches: 10.
+
+    Always cite sources for material you quote, summarize, or
+    paraphrase. At the end of a paragraph where you're referring to
+    scraped content, append a properly formatted link that matches the
+    scraped URL.  """
     return prompt
 

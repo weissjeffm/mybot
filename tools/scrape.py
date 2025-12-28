@@ -2,9 +2,11 @@ import requests
 import trafilatura
 
 def scrape_url(url: str):
-    """
-    Scrapes the main text content from a webpage.
-    Uses a spoofed User-Agent to bypass basic bot blockers.
+    """Scrapes the main text content from a webpage. NEVER call this
+    function with URLs you made up. The URL should be copied fully
+    intact from either a) a user's message, b) the response to your
+    own call to the 'search' tool.
+
     """
     # Spoof a real browser to get past archive.is / Cloudflare basic checks
     headers = {
