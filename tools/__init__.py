@@ -1,5 +1,5 @@
 import inspect
-from . import ssh, ipmi, scrape, search  # basic # Import your tool modules
+from . import ssh, ipmi, scrape, search, topic  # basic # Import your tool modules
 
 # 1. Register your tools here
 REGISTRY = {
