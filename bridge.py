@@ -64,6 +64,45 @@ class MatrixBot:
         await self.client.join(room.room_id)
 
     async def message_callback(self, room: MatrixRoom, event: RoomMessageText):
+        # Ignore own messages
+        if event.sender == self.client.user_id:
+            return
+
+        # --- 0. THE GATEKEEPER (Group Chat Logic) ---
+        
+        # Check 1: Is this a 1-on-1? (Bot + 1 Human = 2 members)
+        # room.member_count is a property of the MatrixRoom object
+        is_direct_chat = room.member_count <= 2
+        
+        # Check 2: Was the bot mentioned?
+        # We check against the ID (@weissbot:...) and a casual name "weissbot"
+        is_mentioned = (self.client.user_id in event.body) or ("weissbot" in event.body.lower())
+        
+        # Check 3: Is this a direct reply to the bot?
+        # We check the 'm.in_reply_to' field in the event content
+        content = event.source.get('content', {})
+        relates_to = content.get('m.relates_to', {})
+        reply_to_id = relates_to.get('m.in_reply_to', {}).get('event_id')
+        
+        is_reply_to_bot = False
+        if reply_to_id:
+            # We have to look up who sent the message we are replying to.
+            # This is slightly expensive, so we wrap it in a try/catch or skip if lazy.
+            # For a MVP, 'is_mentioned' is usually enough, but let's be robust:
+            # (Requires fetching the event, which might be slow. Let's stick to mentions for speed + 1-on-1)
+            pass 
+
+        # DECISION: To Speak or Not To Speak
+        # We only proceed if it's a 1-on-1, OR we were summoned
+        if not (is_direct_chat or is_mentioned):
+            print(f"Skipping message in {room.display_name} (Group Chat, No Mention)")
+            return
+
+        # If mentioned, strip the bot's name from the prompt so the LLM doesn't get confused
+        # e.g. "@weissbot What is the time?" -> "What is the time?"
+        clean_body = event.body.replace(self.client.user_id, "").replace("weissbot", "", 1).strip()
+        
+        # ... Continue with the rest of the function using 'clean_body' ...
         # Ignore our own messages
         if event.sender == self.client.user_id:
             return
@@ -118,7 +157,7 @@ class MatrixBot:
             {history_text}
             
             CURRENT USER REQUEST:
-            {event.body}
+            {clean_body}
             """
 
             # --- 4. RUN THE BRAIN ---
