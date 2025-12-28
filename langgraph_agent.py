@@ -99,9 +99,11 @@ async def run_agent_logic(user_input: str, log_callback):
     initial_state = {"messages": [HumanMessage(content=user_input)], "current_thought": ""}
     
     final_response = ""
+
+    config = {"recursion_limit": 100}
     
     # Run the graph step-by-step
-    async for event in app.astream(initial_state):
+    async for event in app.astream(initial_state, config=config):
         for node_name, state_update in event.items():
             
             # LOGGING: This sends the "Thinking..." messages to Matrix
