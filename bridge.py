@@ -47,7 +47,6 @@ class MatrixBot:
         self.client.add_to_device_callback(self.cb_verification_request, ToDeviceEvent)
         
         # 1. Start (These still work with specific classes)
-        self.client.add_to_device_callback(self.cb_verification_request, KeyVerificationRequest)
         self.client.add_event_callback(self.message_callback, RoomMessageText)
         self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
         
