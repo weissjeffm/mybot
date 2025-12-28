@@ -119,30 +119,43 @@ class MatrixBot:
         try:
             # --- 4. TOOL LOGGING CALLBACK ---
             async def log_callback(text):
-                # CHECK FOR JSON SIGNAL
-                try:
-                    if text.strip().startswith('{') and "TOPIC_CHANGE" in text:
-                        data = json.loads(text)
-                        subject = data.get("subject", "New Topic")
-                        
-                        # ACTION: Create New Thread Header in Main Chat
-                        new_header = await self.client.room_send(
-                            room_id=room.room_id,
-                            message_type="m.room.message",
-                            content={
-                                "msgtype": "m.text",
-                                "body": f"🧵 New Topic: {subject}",
-                                "format": "org.matrix.custom.html",
-                                "formatted_body": f"<h3>🧵 {subject}</h3>"
-                            }
-                        )
-                        # Switch all future logs/answers to this new thread
-                        state["current_root"] = new_header.event_id
-                        print(f"Topic Switch! New Root: {state['current_root']}")
-                        return # Swallow this log line
-                except:
-                    pass
+                print(f"DEBUG LOG: {text}") # <--- 1. See exactly what comes in
 
+                # CHECK FOR JSON SIGNAL
+                # We check if "TOPIC_CHANGE" is in there, regardless of prefix
+                if "TOPIC_CHANGE" in text and "{" in text:
+                    try:
+                        # 2. Extract JSON part (Ignore "Ran tool. " prefix)
+                        json_start = text.find('{')
+                        json_str = text[json_start:] 
+                        
+                        data = json.loads(json_str)
+                        
+                        # Verify it's actually our signal
+                        if data.get("signal") == "TOPIC_CHANGE":
+                            subject = data.get("subject", "New Topic")
+                            
+                            # ACTION: Create New Thread Header
+                            new_header = await self.client.room_send(
+                                room_id=room.room_id,
+                                message_type="m.room.message",
+                                content={
+                                    "msgtype": "m.text",
+                                    "body": f"🧵 New Topic: {subject}",
+                                    "format": "org.matrix.custom.html",
+                                    "formatted_body": f"<h3>🧵 {subject}</h3>"
+                                }
+                            )
+                            
+                            state["current_root"] = new_header.event_id
+                            print(f"Topic Switch! New Root: {state['current_root']}")
+                            return # Swallow this log line so it doesn't print to chat
+                            
+                    except json.JSONDecodeError as e:
+                        print(f"DEBUG: Found TOPIC_CHANGE but invalid JSON: {e}")
+                    except Exception as e:
+                        print(f"DEBUG: Error handling topic change: {e}")
+                        # Don't silence it! Let it print to console.
                 # NORMAL LOGGING (Gray Box)
                 html_log = f"<blockquote><font color='gray'>⚙️ {text}</font></blockquote>"
                 await self.client.room_send(
