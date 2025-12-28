@@ -7,9 +7,11 @@ from langgraph_agent import run_agent_logic
 
 from nio import (
     AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent,
-    KeyVerificationRequest, KeyVerificationStart, KeyVerificationCancel, KeyVerificationKey, 
+    KeyVerificationStart, KeyVerificationCancel, KeyVerificationKey, 
     KeyVerificationMac, LocalProtocolError
 )
+from nio.events.key.verification import KeyVerificationRequest
+
 # Config
 MATRIX_URL = os.getenv("MATRIX_URL", "https://matrix.org")
 MATRIX_USER = os.getenv("MATRIX_USER", "@weissbot:matrix.org")
