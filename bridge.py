@@ -5,6 +5,11 @@ import markdown
 from nio import AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent
 from langgraph_agent import run_agent_logic 
 
+from nio import (
+    AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent,
+    KeyVerificationStart, KeyVerificationCancel, KeyVerificationKey, 
+    KeyVerificationMac, LocalProtocolError
+)
 # Config
 MATRIX_URL = os.getenv("MATRIX_URL", "https://matrix.org")
 MATRIX_USER = os.getenv("MATRIX_USER", "@weissbot:matrix.org")
@@ -12,30 +17,57 @@ MATRIX_PASS = os.getenv("MATRIX_PASS", "password")
 
 class MatrixBot:
     def __init__(self):
-        self.client = AsyncClient(MATRIX_URL, MATRIX_USER)
+        
         self.user_cache = {} # Caches 'User ID' -> 'Display Name'
+        # We MUST provide a store_path. 
+        # The bot will create a SQLite DB here to store encryption keys.
+        # This folder MUST be persistent (backed up).
+        store_folder = "./crypto_store" 
+        if not os.path.exists(store_folder):
+            os.makedirs(store_folder)
 
-    async def start(self):
+        self.client = AsyncClient(
+            MATRIX_URL, 
+            MATRIX_USER, 
+            store_path=store_folder
+        )
+
+
+async def start(self):
         print(f"Logging in as {MATRIX_USER}...")
         await self.client.login(MATRIX_PASS)
         
-        # Load resume token
         if os.path.exists("next_batch"):
             with open("next_batch", "r") as f:
                 self.client.next_batch = f.read().strip()
 
-        # Register Callbacks
+        # --- STANDARD CALLBACKS ---
         self.client.add_event_callback(self.message_callback, RoomMessageText)
         self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
         
+        # --- CRYPTO CALLBACKS (The "To-Device" ones are crucial) ---
+        # 1. Start Verification
+        self.client.add_to_device_callback(self.cb_verification_start, KeyVerificationStart)
+        self.client.add_event_callback(self.cb_verification_start, KeyVerificationStart)
+        
+        # 2. Key Exchange (Triggers Emoji Print)
+        self.client.add_to_device_callback(self.cb_verification_key, KeyVerificationKey)
+        self.client.add_event_callback(self.cb_verification_key, KeyVerificationKey)
+
+        # 3. Cancellation
+        self.client.add_to_device_callback(self.cb_verification_cancel, KeyVerificationCancel)
+        self.client.add_event_callback(self.cb_verification_cancel, KeyVerificationCancel)
+
         print(f"Bot is listening... (Resuming from: {self.client.next_batch})")
 
-        # MANUAL SYNC LOOP (Fixes 'loop_callback' bug)
+        # Initial Sync to load keys
+        await self.client.sync(timeout=30000, full_state=True)
+
+        # MANUAL LOOP
         while True:
             try:
                 sync_response = await self.client.sync(timeout=30000, full_state=True)
                 
-                # Save token
                 if hasattr(sync_response, "next_batch"):
                     self.client.next_batch = sync_response.next_batch
                     with open("next_batch", "w") as f:
@@ -44,7 +76,7 @@ class MatrixBot:
             except Exception as e:
                 print(f"Sync error: {e}")
                 await asyncio.sleep(5)
-
+                
     async def invite_callback(self, room: MatrixRoom, event: InviteMemberEvent):
         """Auto-join rooms."""
         print(f"Invite received for room {room.room_id}!")
@@ -209,6 +241,45 @@ CURRENT REQUEST FROM {sender_name}:
 
         finally:
             await self.client.room_typing(room.room_id, False)
+
+    # --- ENCRYPTION HELPERS ---
+
+    async def cb_verification_start(self, event: KeyVerificationStart):
+        """1. Receive request and accept it."""
+        print(f"🔐 Verification started by {event.sender}. Accepting...")
+        
+        # We accept the SAS method (Emoji check)
+        if "m.sas.v1" in event.content.get("method", []):
+            await self.client.accept_sas_verification(event.transaction_id)
+        else:
+            print(f"🔐 Error: Sender is using an unsupported method: {event.content.get('method')}")
+
+    async def cb_verification_key(self, event: KeyVerificationKey):
+        """2. Keys exchanged. Print emojis and auto-confirm."""
+        
+        # Get the SAS object for this transaction
+        sas = self.client.key_verifications.get(event.transaction_id)
+        
+        if sas and sas.get_emoji():
+            print("\n" + "="*40)
+            print(f"🔐 VERIFICATION EMOJIS FOR {event.sender}")
+            print("="*40)
+            
+            # Print the emojis to the log
+            for emoji in sas.get_emoji():
+                print(f"   {emoji.emoji}  ({emoji.description})")
+                
+            print("="*40 + "\n")
+
+            # AUTO-CONFIRM: We assume if you see this log, you are verifying it.
+            # This tells the server "Yes, the bot sees these emojis".
+            # Now YOU just need to click "They Match" on your phone.
+            await self.client.confirm_short_auth_string(event.transaction_id)
+            print("🔐 Bot auto-confirmed match. Please confirm on your device now!")
+
+    async def cb_verification_cancel(self, event: KeyVerificationCancel):
+        """Handle cancellations."""
+        print(f"🔐 Verification cancelled by {event.sender}: {event.content.get('reason')}")
 
 if __name__ == "__main__":
     bot = MatrixBot()
