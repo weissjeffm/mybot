@@ -141,27 +141,26 @@ class MatrixBot:
         sender_name = await self.get_display_name(event.sender)
         # check if the user is just trying to verify via the matrix protocol
         if clean_body == "!verify":
-            print(f"🔐 Popping verification request on {sender_name}'s screen...")
+            print(f"🔐 Initiating verification with {sender_name}...")
             
+            # We must generate a unique transaction ID
             tx_id = str(uuid.uuid4())
             
-            # Send a "To-Device" event. 
-            # This forces a modal popup in Element, bypassing the chat history.
-            await self.client.to_device(
-                "m.key.verification.request",
-                {
-                    "from_device": self.client.device_id,
-                    "methods": ["m.sas.v1"],
-                    "timestamp": int(time.time() * 1000),
-                    "transaction_id": tx_id
-                },
-                to_user_id=event.sender
-            )
+            # Construct the "In-Room" Verification Request
+            # This makes a button appear in the chat stream
+            content = {
+                "body": "🔐 Verification Request (Please Accept)",
+                "msgtype": "m.key.verification.request",
+                "from_device": self.client.device_id,
+                "methods": ["m.sas.v1"], # We support Emoji (SAS)
+                "timestamp": int(time.time() * 1000),
+                "transaction_id": tx_id
+            }
             
             await self.client.room_send(
-                room.room_id, 
-                "m.room.message", 
-                {"body": "Check your screen for a popup now!", "msgtype": "m.text"}
+                room.room_id,
+                message_type="m.room.message",
+                content=content
             )
             return
         
