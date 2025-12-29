@@ -145,26 +145,17 @@ class MatrixBot:
             
             tx_id = str(uuid.uuid4())
             
-            # 1. The Content (The actual payload)
-            content = {
-                "from_device": self.client.device_id,
-                "methods": ["m.sas.v1"],
-                "timestamp": int(time.time() * 1000),
-                "transaction_id": tx_id
-            }
-
-            # 2. The Envelope (User -> Device -> Content)
-            # We use "*" as the device ID to send it to ALL your devices (Phone + Desktop)
-            payload = {
-                event.sender: {
-                    "*": content 
-                }
-            }
-
-            # 3. Send via low-level to_device API
+            # Send a "To-Device" event. 
+            # This forces a modal popup in Element, bypassing the chat history.
             await self.client.to_device(
-                "m.key.verification.request", # Event Type
-                payload                       # The Nested Dictionary
+                "m.key.verification.request",
+                {
+                    "from_device": self.client.device_id,
+                    "methods": ["m.sas.v1"],
+                    "timestamp": int(time.time() * 1000),
+                    "transaction_id": tx_id
+                },
+                to_user_id=event.sender
             )
             
             await self.client.room_send(
@@ -173,6 +164,7 @@ class MatrixBot:
                 {"body": "Check your screen for a popup now!", "msgtype": "m.text"}
             )
             return
+        
         print(f"Processing request from {sender_name}: {clean_body}")
 
         # --- 2. DETERMINE ROOT ---
