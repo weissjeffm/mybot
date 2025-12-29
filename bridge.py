@@ -14,7 +14,7 @@ from langgraph_agent import run_agent_logic
 # Config
 MATRIX_URL = os.getenv("MATRIX_URL", "https://matrix.org")
 MATRIX_USER = os.getenv("MATRIX_USER", "@weissbot:matrix.org")
-MATRIX_PASS = os.getenv("MATRIX_PASS", "your_password")
+MATRIX_PASS = os.getenv("MATRIX_PASS", "password")
 
 class MatrixBot:
     def __init__(self):
