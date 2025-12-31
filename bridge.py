@@ -35,6 +35,8 @@ class MatrixBot:
             store_path=store_folder
         )
 
+        self.pending_events = {} # Stores session_id -> list of MegolmEvents
+
     async def start(self):
         # --- 1. PERSISTENT LOGIN LOGIC ---
         creds_file = "credentials.json"
@@ -79,6 +81,7 @@ class MatrixBot:
         self.client.add_event_callback(self.message_callback, RoomMessageText)
         self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
         self.client.add_event_callback(self.decryption_failure_callback, MegolmEvent)
+        self.client.add_to_device_callback(self.cb_key_arrived, ToDeviceEvent)
         
         print(f"Bot is listening... (Resuming from: {self.client.next_batch})")
 
@@ -299,8 +302,13 @@ CURRENT REQUEST FROM {sender_name}:
         before the keys have been shared.
         """
         print(f"🔒 Encrypted message received from {event.sender} (Session: {event.session_id})")
-        print("   ❌ Unable to decrypt. Waiting for keys...")
+        #print("   ❌ Unable to decrypt. Waiting for keys...")
 
+        # Add to buffer so we can retry later
+        if event.session_id not in self.pending_events:
+            self.pending_events[event.session_id] = []
+        self.pending_events[event.session_id].append(event)
+        
         # CHECK: Do we already have the key?
         if not self.client.store.get_inbound_group_session(room_id, event.session_id):
             print(f"   ❌ Key missing for this session. requesting it now...")
@@ -315,7 +323,45 @@ CURRENT REQUEST FROM {sender_name}:
             print("   📤 Key request sent. Waiting for Element to reply...")
         else:
             print("   🤔 We have the key, but nio didn't decrypt it yet. It might be processed next tick.")
-        
+
+    async def cb_key_arrived(self, event: ToDeviceEvent):
+        """
+        Called when keys arrive. Checks if we have pending messages waiting for this key.
+        """
+        # Safety check for the 'str object has no attribute type' error
+        if getattr(event, "type", "") != "m.room_key":
+            return
+
+        # The event content has the session_id
+        content = event.content
+        session_id = content.get("session_id")
+        room_id = content.get("room_id")
+
+        if session_id in self.pending_events:
+            print(f"🔑 KEYS ARRIVED for session {session_id}! Retrying {len(self.pending_events[session_id])} messages...")
+            
+            # Process all waiting messages for this session
+            for encrypted_event in self.pending_events[session_id]:
+                try:
+                    # 1. Manually decrypt the event
+                    decrypted_event = self.client.decrypt_event(encrypted_event)
+                    
+                    # 2. Check if it's actual text (and not just metadata)
+                    if isinstance(decrypted_event, RoomMessageText):
+                        print(f"   🔓 RETRY SUCCESS: {decrypted_event.body}")
+                        
+                        # 3. Get the room object
+                        room = self.client.rooms.get(room_id)
+                        if room:
+                            # 4. INJECT into your normal logic
+                            await self.message_callback(room, decrypted_event)
+                            
+                except Exception as e:
+                    print(f"   ❌ Retry failed: {e}")
+
+            # clear the buffer for this session
+            del self.pending_events[session_id]
+            
 if __name__ == "__main__":
     bot = MatrixBot()
     loop = asyncio.get_event_loop()
