@@ -61,6 +61,9 @@ class MatrixBot:
             self.client.access_token = creds["access_token"]
             self.client.user_id = creds["user_id"]
             self.client.device_id = creds["device_id"]
+
+            # load the existing store
+            self.client.load_store()
             
             # This loads the keys from the database without creating a new device
             await self.client.sync(timeout=30000, full_state=True) 
