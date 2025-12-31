@@ -8,7 +8,7 @@ from nio import AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent
 from langgraph_agent import run_agent_logic 
 
 from nio import (
-    AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent, MegolmEvent
+    AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent, MegolmEvent,
     LocalProtocolError, ToDeviceEvent
 )
 
