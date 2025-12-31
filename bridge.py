@@ -92,6 +92,9 @@ class MatrixBot:
 
         print(f"🤖 BOT DEVICE ID: {self.client.device_id}")
 
+        print("📤 Uploading encryption keys to server...")
+        await self.client.keys_upload()
+        
         # --- 2. RESUME SYNC TOKEN ---
         if os.path.exists("next_batch"):
             with open("next_batch", "r") as f:
