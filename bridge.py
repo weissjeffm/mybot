@@ -325,9 +325,7 @@ CURRENT REQUEST FROM {sender_name}:
 
         # request key
         print(f"   ❌ Key missing in RAM. Requesting from {event.sender}...")
-        await self.client.request_room_key(
-            event, room.room_id, event.sender, event.session_id
-        )
+        await self.client.request_room_key(event)
             
     async def cb_key_arrived(self, event: ToDeviceEvent):
         """
