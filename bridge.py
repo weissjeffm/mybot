@@ -77,20 +77,11 @@ class MatrixBot:
                 self.client.next_batch = f.read().strip()
 
         # --- 3. REGISTER CALLBACKS ---
-        # (Keep your existing callback registration code here)
-        # self.client.add_event_callback(...)
-        # ...
-
+        self.client.add_event_callback(self.message_callback, RoomMessageText)
+        self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
+                
         print(f"Bot is listening... (Resuming from: {self.client.next_batch})")
 
-        # --- 4. START LOOP ---
-        # (Keep your existing loop code here)
-        # while True: ...
-        
-        # Initial Sync to load keys
-        await self.client.sync(timeout=30000, full_state=True)
-
-        # MANUAL LOOP
         while True:
             try:
                 sync_response = await self.client.sync(timeout=30000, full_state=True)
