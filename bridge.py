@@ -15,15 +15,15 @@ from nio import (
 import logging
 import sys
 
-# Configure logging to print to the terminal
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
-    stream=sys.stdout
-)
+# # Configure logging to print to the terminal
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+#     stream=sys.stdout
+# )
 
-# Force 'nio' to be verbose so we see the store failure
-logging.getLogger('nio').setLevel(logging.DEBUG)
+# # Force 'nio' to be verbose so we see the store failure
+# logging.getLogger('nio').setLevel(logging.DEBUG)
 
 # Config
 MATRIX_URL = os.getenv("MATRIX_URL", "https://matrix.org")
@@ -43,7 +43,7 @@ class MatrixBot:
 
         self.client = AsyncClient(
             MATRIX_URL, 
-            MATRIX_USER, 
+            "@weissbot:matrix.org",
             store_path=store_folder
         )
 
