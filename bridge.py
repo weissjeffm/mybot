@@ -64,6 +64,10 @@ class MatrixBot:
 
             # load the existing store
             self.client.load_store()
+
+            # diagnostic
+            print(f"🕵️ STORE TYPE: {type(self.client.store)}")
+            print(f"🕵️ STORE MRO: {type(self.client.store).mro()}")
             
             # This loads the keys from the database without creating a new device
             await self.client.sync(timeout=30000, full_state=True) 
