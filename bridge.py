@@ -8,9 +8,8 @@ from nio import AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent
 from langgraph_agent import run_agent_logic 
 
 from nio import (
-    AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent,
-    KeyVerificationStart, KeyVerificationCancel, KeyVerificationKey, 
-    KeyVerificationMac, LocalProtocolError, ToDeviceEvent
+    AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent, MegolmEvent
+    LocalProtocolError, ToDeviceEvent
 )
 
 
@@ -79,13 +78,44 @@ class MatrixBot:
         # --- 3. REGISTER CALLBACKS ---
         self.client.add_event_callback(self.message_callback, RoomMessageText)
         self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
-                
+        self.client.add_event_callback(self.decryption_failure_callback, MegolmEvent)
+        
         print(f"Bot is listening... (Resuming from: {self.client.next_batch})")
 
         while True:
             try:
                 sync_response = await self.client.sync(timeout=30000, full_state=True)
-                
+
+                # Check joined rooms for activity
+                if sync_response.rooms.join:
+                    for room_id, room_info in sync_response.rooms.join.items():
+                        
+                        # Loop through every new event in the timeline
+                        for event in room_info.timeline.events:
+                            
+                            # 1. Print the event type so we know what we are dealing with
+                            print(f"\n📨 [Incoming] Room: {room_id} | Type: {type(event).__name__}")
+                            
+                            # 2. Check for Encryption (Locked Box)
+                            if isinstance(event, MegolmEvent):
+                                print(f"   🔒 ENCRYPTED (Session: {event.session_id})")
+                                print(f"   ❌ DECRYPTION FAILED. Keys missing or mismatched.")
+                                
+                                # OPTIONAL: Auto-request keys here if you want to be aggressive
+                                # await self.client.request_room_key(event, room_id, event.sender, event.session_id)
+                                
+                            # 3. Check for Decrypted Text (Unlocked Box)
+                            elif isinstance(event, RoomMessageText):
+                                print(f"   🔓 DECRYPTED: {event.body}")
+                                # (The normal callback will fire for this one automatically)
+                                
+                            # 4. Check for Keys arriving
+                            elif event.type == "m.room_key":
+                                print("   🔑 KEY RECEIVED! Retrying decryption...")
+                                
+                            else:
+                                print(f"   ℹ️ Ignored event type: {event.type}")
+                                
                 if hasattr(sync_response, "next_batch"):
                     self.client.next_batch = sync_response.next_batch
                     with open("next_batch", "w") as f:
@@ -291,7 +321,19 @@ CURRENT REQUEST FROM {sender_name}:
 
         finally:
             await self.client.room_typing(room.room_id, False)
-
+            
+    async def decryption_failure_callback(self, room: MatrixRoom, event: MegolmEvent):
+        """
+        Handles messages that the bot could not decrypt.
+        This usually happens immediately after joining a new encrypted room 
+        before the keys have been shared.
+        """
+        print(f"🔒 Encrypted message received from {event.sender} (Session: {event.session_id})")
+        print("   ❌ Unable to decrypt. Waiting for keys...")
+        
+        # Optional: Ask the library to retry requesting keys for this session
+        # (The library does this automatically, but logging helps you see it's alive)
+        
 if __name__ == "__main__":
     bot = MatrixBot()
     loop = asyncio.get_event_loop()
