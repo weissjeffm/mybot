@@ -12,10 +12,18 @@ from nio import (
     LocalProtocolError, ToDeviceEvent
 )
 
-import olm
-if not hasattr(olm, "__version__"):
-    olm.__version__ = "3.2.16"  # Mock the expected version
+import logging
+import sys
 
+# Configure logging to print to the terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+    stream=sys.stdout
+)
+
+# Force 'nio' to be verbose so we see the store failure
+logging.getLogger('nio').setLevel(logging.DEBUG)
 
 # Config
 MATRIX_URL = os.getenv("MATRIX_URL", "https://matrix.org")
