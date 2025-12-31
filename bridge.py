@@ -197,7 +197,8 @@ class MatrixBot:
                     await self.client.room_send(
                         room.room_id,
                         message_type="m.room.message",
-                        content=content
+                        content=content,
+                        ignore_unverified_devices=True
                     )
                     print("🔐 Request SENT successfully!")
                 except Exception as e:
@@ -247,6 +248,7 @@ class MatrixBot:
                             new_header = await self.client.room_send(
                                 room_id=room.room_id,
                                 message_type="m.room.message",
+                                ignore_unverified_devices=True,
                                 content={
                                     "msgtype": "m.text",
                                     "body": f"🧵 New Topic: {subject} (from {sender_name})",
@@ -269,6 +271,7 @@ class MatrixBot:
                 await self.client.room_send(
                     room_id=room.room_id,
                     message_type="m.room.message",
+                    ignore_unverified_devices=True,
                     content={
                         "msgtype": "m.text",
                         "body": f"⚙️ {text}",
@@ -303,6 +306,7 @@ CURRENT REQUEST FROM {sender_name}:
             await self.client.room_send(
                 room_id=room.room_id,
                 message_type="m.room.message",
+                ignore_unverified_devices=True,
                 content={
                     "msgtype": "m.text",
                     "body": final_response,
