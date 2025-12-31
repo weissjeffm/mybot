@@ -300,9 +300,21 @@ CURRENT REQUEST FROM {sender_name}:
         """
         print(f"🔒 Encrypted message received from {event.sender} (Session: {event.session_id})")
         print("   ❌ Unable to decrypt. Waiting for keys...")
-        
-        # Optional: Ask the library to retry requesting keys for this session
-        # (The library does this automatically, but logging helps you see it's alive)
+
+        # CHECK: Do we already have the key?
+        if not self.client.store.get_inbound_group_session(room_id, event.session_id):
+            print(f"   ❌ Key missing for this session. requesting it now...")
+                                    
+            # ACTION: Demand the key from the sender (your Element client)
+            await self.client.request_room_key(
+                event, 
+                room.room_id, 
+                event.sender, 
+                event.session_id
+            )
+            print("   📤 Key request sent. Waiting for Element to reply...")
+        else:
+            print("   🤔 We have the key, but nio didn't decrypt it yet. It might be processed next tick.")
         
 if __name__ == "__main__":
     bot = MatrixBot()
