@@ -323,14 +323,7 @@ CURRENT REQUEST FROM {sender_name}:
             self.pending_events[event.session_id] = []
         self.pending_events[event.session_id].append(event)
 
-        # 2. Check if we have the keys in MEMORY
-        # (We check the client's RAM cache instead of querying the store directly)
-        has_key = False
-        if room.room_id in self.client.inbound_group_sessions:
-            if event.session_id in self.client.inbound_group_sessions[room.room_id]:
-                has_key = True
-        
-        # 3. If missing, request it
+        # request key
         if not has_key:
             print(f"   ❌ Key missing in RAM. Requesting from {event.sender}...")
             await self.client.request_room_key(
