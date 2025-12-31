@@ -316,34 +316,29 @@ CURRENT REQUEST FROM {sender_name}:
             await self.client.room_typing(room.room_id, False)
             
     async def decryption_failure_callback(self, room: MatrixRoom, event: MegolmEvent):
-        """
-        Handles messages that the bot could not decrypt.
-        This usually happens immediately after joining a new encrypted room 
-        before the keys have been shared.
-        """
-        print(f"🔒 Encrypted message received from {event.sender} (Session: {event.session_id})")
-        #print("   ❌ Unable to decrypt. Waiting for keys...")
-
-        # Add to buffer so we can retry later
+        print(f"🔒 Encrypted message (Session: {event.session_id}) from {event.sender}")
+        
+        # 1. Buffer the event so we can retry later
         if event.session_id not in self.pending_events:
             self.pending_events[event.session_id] = []
         self.pending_events[event.session_id].append(event)
-        
-        # CHECK: Do we already have the key?
-        if not self.client.store.get_inbound_group_session(room_id, event.session_id):
-            print(f"   ❌ Key missing for this session. requesting it now...")
-                                    
-            # ACTION: Demand the key from the sender (your Element client)
-            await self.client.request_room_key(
-                event, 
-                room.room_id, 
-                event.sender, 
-                event.session_id
-            )
-            print("   📤 Key request sent. Waiting for Element to reply...")
-        else:
-            print("   🤔 We have the key, but nio didn't decrypt it yet. It might be processed next tick.")
 
+        # 2. Check if we have the keys in MEMORY
+        # (We check the client's RAM cache instead of querying the store directly)
+        has_key = False
+        if room.room_id in self.client.inbound_group_sessions:
+            if event.session_id in self.client.inbound_group_sessions[room.room_id]:
+                has_key = True
+        
+        # 3. If missing, request it
+        if not has_key:
+            print(f"   ❌ Key missing in RAM. Requesting from {event.sender}...")
+            await self.client.request_room_key(
+                event, room.room_id, event.sender, event.session_id
+            )
+        else:
+            print(f"   ⚠️ Key exists in RAM but decryption failed. Keeping in buffer.")
+            
     async def cb_key_arrived(self, event: ToDeviceEvent):
         """
         Called when keys arrive. Checks if we have pending messages waiting for this key.
