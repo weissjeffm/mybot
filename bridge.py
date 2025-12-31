@@ -12,6 +12,10 @@ from nio import (
     LocalProtocolError, ToDeviceEvent
 )
 
+import olm
+if not hasattr(olm, "__version__"):
+    olm.__version__ = "3.2.16"  # Mock the expected version
+
 
 # Config
 MATRIX_URL = os.getenv("MATRIX_URL", "https://matrix.org")
