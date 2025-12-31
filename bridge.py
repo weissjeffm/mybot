@@ -66,9 +66,9 @@ class MatrixBot:
             self.client.load_store()
 
             # diagnostic
-            print(f"🕵️ STORE TYPE: {type(self.client.store)}")
-            print(f"🕵️ STORE MRO: {type(self.client.store).mro()}")
-            print(f"🕵️ STORE dir: {dir(self.client.store)}")
+            #print(f"🕵️ STORE TYPE: {type(self.client.store)}")
+            #print(f"🕵️ STORE MRO: {type(self.client.store).mro()}")
+            #print(f"🕵️ STORE dir: {dir(self.client.store)}")
             
             # This loads the keys from the database without creating a new device
             await self.client.sync(timeout=30000, full_state=True) 
@@ -324,13 +324,10 @@ CURRENT REQUEST FROM {sender_name}:
         self.pending_events[event.session_id].append(event)
 
         # request key
-        if not has_key:
-            print(f"   ❌ Key missing in RAM. Requesting from {event.sender}...")
-            await self.client.request_room_key(
-                event, room.room_id, event.sender, event.session_id
-            )
-        else:
-            print(f"   ⚠️ Key exists in RAM but decryption failed. Keeping in buffer.")
+        print(f"   ❌ Key missing in RAM. Requesting from {event.sender}...")
+        await self.client.request_room_key(
+            event, room.room_id, event.sender, event.session_id
+        )
             
     async def cb_key_arrived(self, event: ToDeviceEvent):
         """
