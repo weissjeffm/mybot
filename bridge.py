@@ -36,38 +36,57 @@ class MatrixBot:
             store_path=store_folder
         )
 
-
     async def start(self):
-        print(f"Logging in as {MATRIX_USER}...")
-        await self.client.login(MATRIX_PASS)
-        print(f"🤖 MY DEVICE ID: {self.client.device_id}")
+        # --- 1. PERSISTENT LOGIN LOGIC ---
+        creds_file = "credentials.json"
         
+        if os.path.exists(creds_file):
+            print("💾 Found saved credentials. Restoring session...")
+            with open(creds_file, "r") as f:
+                creds = json.load(f)
+            
+            self.client.access_token = creds["access_token"]
+            self.client.user_id = creds["user_id"]
+            self.client.device_id = creds["device_id"]
+            
+            # This loads the keys from the database without creating a new device
+            await self.client.sync(timeout=30000, full_state=True) 
+            
+        else:
+            print(f"🆕 No credentials found. Logging in as {MATRIX_USER}...")
+            resp = await self.client.login(MATRIX_PASS)
+            
+            if isinstance(resp, LocalProtocolError):
+                print(f"❌ Login failed: {resp}")
+                return
+
+            # SAVE the credentials so we are the SAME device next time
+            print(f"💾 Saving new credentials to {creds_file}...")
+            with open(creds_file, "w") as f:
+                json.dump({
+                    "access_token": resp.access_token,
+                    "user_id": resp.user_id,
+                    "device_id": resp.device_id
+                }, f)
+
+        print(f"🤖 BOT DEVICE ID: {self.client.device_id}")
+
+        # --- 2. RESUME SYNC TOKEN ---
         if os.path.exists("next_batch"):
             with open("next_batch", "r") as f:
                 self.client.next_batch = f.read().strip()
 
-        # --- STANDARD CALLBACKS ---
-        self.client.add_to_device_callback(self.cb_verification_request, ToDeviceEvent)
-        
-        # 1. Start (These still work with specific classes)
-        self.client.add_event_callback(self.message_callback, RoomMessageText)
-        self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
-        
-        # --- CRYPTO CALLBACKS (The "To-Device" ones are crucial) ---
-        # 1. Start Verification
-        self.client.add_to_device_callback(self.cb_verification_start, KeyVerificationStart)
-        self.client.add_event_callback(self.cb_verification_start, KeyVerificationStart)
-        
-        # 2. Key Exchange (Triggers Emoji Print)
-        self.client.add_to_device_callback(self.cb_verification_key, KeyVerificationKey)
-        self.client.add_event_callback(self.cb_verification_key, KeyVerificationKey)
-
-        # 3. Cancellation
-        self.client.add_to_device_callback(self.cb_verification_cancel, KeyVerificationCancel)
-        self.client.add_event_callback(self.cb_verification_cancel, KeyVerificationCancel)
+        # --- 3. REGISTER CALLBACKS ---
+        # (Keep your existing callback registration code here)
+        # self.client.add_event_callback(...)
+        # ...
 
         print(f"Bot is listening... (Resuming from: {self.client.next_batch})")
 
+        # --- 4. START LOOP ---
+        # (Keep your existing loop code here)
+        # while True: ...
+        
         # Initial Sync to load keys
         await self.client.sync(timeout=30000, full_state=True)
 
@@ -281,66 +300,6 @@ CURRENT REQUEST FROM {sender_name}:
 
         finally:
             await self.client.room_typing(room.room_id, False)
-
-    # --- ENCRYPTION HELPERS ---
-    async def cb_verification_request(self, event: ToDeviceEvent):
-        """0. Handle the initial 'Can we verify?' request."""
-        # FILTER: Only act if it's actually a verification request
-        if event.type != "m.key.verification.request":
-            return
-
-        print(f"🔐 Received verification REQUEST from {event.sender}. Sending READY.")
-        
-        # Access content safely (generic events use a dict)
-        content = event.content
-        tx_id = content.get("transaction_id")
-        
-        await self.client.to_device(
-            "m.key.verification.ready",
-            {
-                "transaction_id": tx_id,
-                "from_device": self.client.device_id,
-                "methods": ["m.sas.v1"]
-            },
-            to_user_id=event.sender,
-            to_device_id=event.source_device
-        )
-    async def cb_verification_start(self, event: KeyVerificationStart):
-        """1. Receive request and accept it."""
-        print(f"🔐 Verification started by {event.sender}. Accepting...")
-        
-        # We accept the SAS method (Emoji check)
-        if "m.sas.v1" in event.content.get("method", []):
-            await self.client.accept_sas_verification(event.transaction_id)
-        else:
-            print(f"🔐 Error: Sender is using an unsupported method: {event.content.get('method')}")
-
-    async def cb_verification_key(self, event: KeyVerificationKey):
-        """2. Keys exchanged. Print emojis and auto-confirm."""
-        
-        # Get the SAS object for this transaction
-        sas = self.client.key_verifications.get(event.transaction_id)
-        
-        if sas and sas.get_emoji():
-            print("\n" + "="*40)
-            print(f"🔐 VERIFICATION EMOJIS FOR {event.sender}")
-            print("="*40)
-            
-            # Print the emojis to the log
-            for emoji in sas.get_emoji():
-                print(f"   {emoji.emoji}  ({emoji.description})")
-                
-            print("="*40 + "\n")
-
-            # AUTO-CONFIRM: We assume if you see this log, you are verifying it.
-            # This tells the server "Yes, the bot sees these emojis".
-            # Now YOU just need to click "They Match" on your phone.
-            await self.client.confirm_short_auth_string(event.transaction_id)
-            print("🔐 Bot auto-confirmed match. Please confirm on your device now!")
-
-    async def cb_verification_cancel(self, event: KeyVerificationCancel):
-        """Handle cancellations."""
-        print(f"🔐 Verification cancelled by {event.sender}: {event.content.get('reason')}")
 
 if __name__ == "__main__":
     bot = MatrixBot()
