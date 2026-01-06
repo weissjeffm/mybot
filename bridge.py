@@ -220,88 +220,94 @@ class MatrixBot:
 
         await self.client.room_typing(room.room_id, True, timeout=60000)
 
+
         # --- 3. EXECUTION STATE ---
-        # We track where we should send logs/answers.
-        # It starts as the current root, but might change if 'signal_topic_change' is called.
-        state = {"current_root": thread_root_id}
+        state = {
+            "current_root": thread_root_id,
+            "log_event_id": None,  # Track the ID of the 'thinking' message
+            "accumulated_logs": []
+        }
 
         try:
-            # --- 4. TOOL LOGGING CALLBACK ---
+            # --- 4. TOOL LOGGING CALLBACK (Optimized for Notifications) ---
             async def log_callback(text):
                 print(f"DEBUG LOG: {text}") 
 
-                # CHECK FOR JSON SIGNAL
+                # 1. Handle Topic Changes (Existing logic)
                 if "TOPIC_CHANGE" in text and "{" in text:
                     try:
                         json_start = text.find('{')
                         json_str = text[json_start:] 
                         data = json.loads(json_str)
-                        
                         if data.get("signal") == "TOPIC_CHANGE":
                             subject = data.get("subject", "New Topic")
-                            
-                            # --- LINK GENERATION ---
-                            # Create a permalink to the User's original trigger message
                             original_link = f"https://matrix.to/#/{room.room_id}/{event.event_id}"
-                            
-                            # ACTION: Create New Thread Header with Context Link
                             new_header = await self.client.room_send(
                                 room_id=room.room_id,
                                 message_type="m.room.message",
                                 ignore_unverified_devices=True,
                                 content={
                                     "msgtype": "m.text",
-                                    "body": f"🧵 New Topic: {subject} (from {sender_name})",
+                                    "body": f"🧵 New Topic: {subject}",
                                     "format": "org.matrix.custom.html",
-                                    "formatted_body": (
-                                        f"<h3>🧵 {subject}</h3>"
-                                        f"<p><i>In response to <a href='{original_link}'>{sender_name}'s request</a></i></p>"
-                                    )
+                                    "formatted_body": f"<h3>🧵 {subject}</h3><p><i>Context: <a href='{original_link}'>Original Request</a></i></p>"
                                 }
                             )
-                            
                             state["current_root"] = new_header.event_id
-                            print(f"Topic Switch! New Root: {state['current_root']}")
+                            state["log_event_id"] = None # Reset log ID for new thread
+                            state["accumulated_logs"] = []
                             return 
-                        
                     except Exception as e:
-                        print(f"DEBUG: Error handling topic change: {e}")
-                        # NORMAL LOGGING (Gray Box)
-                html_log = f"<blockquote><font color='gray'>⚙️ {text}</font></blockquote>"
-                await self.client.room_send(
+                        print(f"Topic change error: {e}")
+
+                # 2. Update the "Thinking" Message via Edit
+                state["accumulated_logs"].append(f"⚙️ {text}")
+                full_log_body = "\n".join(state["accumulated_logs"])
+                # Wrap in blockquote for visual distinction
+                html_log = f"<blockquote><font color='gray'>{'<br>'.join(state['accumulated_logs'])}</font></blockquote>"
+
+                content = {
+                    "msgtype": "m.notice", # Use m.notice to further deprioritize
+                    "body": f"* {full_log_body}", # '*' is standard Matrix prefix for edits
+                    "format": "org.matrix.custom.html",
+                    "formatted_body": html_log,
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": state["current_root"]
+                    }
+                }
+
+                # If we already have a log message, EDIT it. Otherwise, CREATE it.
+                if state["log_event_id"]:
+                    content["m.new_content"] = {
+                        "msgtype": "m.notice",
+                        "body": full_log_body,
+                        "format": "org.matrix.custom.html",
+                        "formatted_body": html_log
+                    }
+                    content["m.relates_to"] = {
+                        "rel_type": "m.replace",
+                        "event_id": state["log_event_id"]
+                    }
+                
+                resp = await self.client.room_send(
                     room_id=room.room_id,
                     message_type="m.room.message",
                     ignore_unverified_devices=True,
-                    content={
-                        "msgtype": "m.text",
-                        "body": f"⚙️ {text}",
-                        "format": "org.matrix.custom.html",
-                        "formatted_body": html_log,
-                        "m.relates_to": {
-                            "rel_type": "m.thread",
-                            "event_id": state["current_root"]
-                        }
-                    }
+                    content=content
                 )
+                
+                if not state["log_event_id"]:
+                    state["log_event_id"] = resp.event_id
 
             # --- 5. BUILD CONTEXT & RUN ---
             history = await self.get_thread_history(room.room_id, state["current_root"])
+            prompt = f"HISTORY:\n{history}\n\nUSER ({sender_name}):\n{clean_body}"
             
-            prompt = f"""
-CONVERSATION HISTORY:
-{history}
-
-CURRENT REQUEST FROM {sender_name}:
-{clean_body}
-"""
             final_response = await run_agent_logic(prompt, log_callback=log_callback)
 
-            # --- 6. SEND FINAL ANSWER ---
-            # Convert Markdown -> HTML (with Tables support)
-            html_response = markdown.markdown(
-                final_response, 
-                extensions=['tables', 'fenced_code', 'nl2br']
-            )
+            # --- 6. SEND FINAL ANSWER (As a fresh message) ---
+            html_response = markdown.markdown(final_response, extensions=['tables', 'fenced_code', 'nl2br'])
 
             await self.client.room_send(
                 room_id=room.room_id,
@@ -314,7 +320,7 @@ CURRENT REQUEST FROM {sender_name}:
                     "formatted_body": html_response,
                     "m.relates_to": {
                         "rel_type": "m.thread",
-                        "event_id": state["current_root"] # Sends to new thread if switched
+                        "event_id": state["current_root"]
                     }
                 }
             )
