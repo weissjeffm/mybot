@@ -241,7 +241,31 @@ class MatrixBot:
                 data = data or {}
                 status = data.get("status", "error")
                 msg = data.get("message", text) # Fallback to 'text' if data is empty
-    
+
+                # handle topic changes
+                # 1. Handle Topic Changes (Existing logic)
+                
+                if data.get("event") == "TOPIC_CHANGE":
+                    try:
+                        topic = data.get("topic", "")
+                        original_link = f"https://matrix.to/#/{room.room_id}/{event.event_id}"
+                        new_header = await self.client.room_send(
+                            room_id=room.room_id,
+                            message_type="m.room.message",
+                            ignore_unverified_devices=True,
+                            content={
+                                "msgtype": "m.text",
+                                "body": f"🧵 New Topic: {topic}",
+                                "format": "org.matrix.custom.html",
+                                "formatted_body": f"<h3>🧵 {topic}</h3><p><i>Context: <a href='{original_link}'>Original Request</a></i></p>"
+                                }
+                            )
+                        state["current_root"] = new_header.event_id
+                        state["log_event_id"] = None # Reset log ID for new thread
+                        state["accumulated_logs"] = []
+                        state["thoughts"] = []
+                    except Exception as e:
+                        print(f"Topic change error: {e}")
                 # Simple logic-based emojis
                 if node == "reason":
                     emoji = "⚙️"

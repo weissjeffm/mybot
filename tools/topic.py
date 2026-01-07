@@ -14,7 +14,9 @@ def signal_topic_change(subject: str):
 
     """
     # Returns a JSON signal that bridge.py will intercept
-    return json.dumps({
-        "signal": "TOPIC_CHANGE",
-        "subject": subject
-    })
+    return {
+        "status": "ok",
+        "event": "TOPIC_CHANGE",
+        "topic": subject,
+        "message": f"Topic changed to: {subject}"
+    }
