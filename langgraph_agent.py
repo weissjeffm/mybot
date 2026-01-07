@@ -1,7 +1,9 @@
 import operator
+import json
+import uuid
 from typing import Annotated, TypedDict, Union, List
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage
+from langchain_core.messages import ToolMessage, SystemMessage, HumanMessage, BaseMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from tools import get_tools_dict, generate_system_prompt
 import subprocess
@@ -14,16 +16,6 @@ llm = ChatOpenAI(
     temperature=0,
     max_tokens=102400
 )
-
-# --- 2. THE TOOLS ---
-def get_system_stats(arg_unused=None):
-    """Real tool that checks server load."""
-    try:
-        # Just running 'uptime' for safety
-        result = subprocess.check_output("uptime", shell=True).decode()
-        return f"System Uptime: {result.strip()}"
-    except Exception as e:
-        return f"Error: {e}"
 
 TOOLS = get_tools_dict() # Automatically loads ssh, ipmi, etc.
 SYSTEM_PROMPT = generate_system_prompt() # Automatically writes the instructions
@@ -47,21 +39,24 @@ async def reason_node(state: AgentState):
     return {"messages": [response], "current_thought": content}
 
 async def act_node(state: AgentState):
-    """The Hands: Executes the tool."""
+    """The Hands: Returns a structured ToolMessage."""
     last_message = state['messages'][-1].content
     
+    # Generate a unique ID so the model can track which result belongs to which call
+    tool_call_id = str(uuid.uuid4())
+
     if "Action:" in last_message:
-        # Extract the string: 'run_cmd("ls")'
         action_str = last_message.split("Action:")[-1].strip()
         
-        # Pass to the safe executor
-        result = safe_execute_tool(action_str, TOOLS)
-        result_msg = f"Tool Output: {result}"
-            
-    else:
-        result_msg = "Error: Tool action not recognized."
-
-    return {"messages": [SystemMessage(content=result_msg)]}
+        # This returns your DICT: {"status": "ok", "message": "Found 5 results", ...}
+        result_dict = safe_execute_tool(action_str, TOOLS)
+        
+        return {
+            "messages": [ToolMessage(content=json.dumps(result_dict), tool_call_id=tool_call_id)],
+            "current_thought": result_dict.get("message") or "Action complete"
+        }
+    
+    return {"messages": [ToolMessage(content="Error", tool_call_id=tool_call_id)]}
 # --- 6. THE GRAPH LOGIC ---
 
 def should_continue(state: AgentState):
@@ -111,15 +106,38 @@ async def run_agent_logic(user_input: str, log_callback):
                 thought = state_update['current_thought']
                 # Clean up the output so we don't spam the whole thought block
                 if "Action:" in thought:
-                    await log_callback(f"Decided to use tool: {thought.split('Action:')[-1].strip()}")
+                    tool = thought.split('Action:')[-1].strip()
+                    await log_callback(f"Using tool: {tool}", node="reason", data={"tool": tool})
                 else:
                     final_response = thought # Capture the final answer
-                    
             elif node_name == "act":
-                # The last message in the update is the tool output
-                tool_out = state_update['messages'][0].content
-                await log_callback(f"Ran tool. {tool_out}")
+                # 1. Get the ToolMessage object
+                msg_obj = state_update['messages'][0]
+                
+                # 2. Extract the actual dictionary content
+                # LangChain stores the dict in .content
+                raw_data = msg_obj.content 
+                
+                # 3. Get the 1-line summary we passed in current_thought
+                summary = state_update.get("current_thought", "Action complete")
 
+                # 4. Reconstruct the 'data' dict the callback expects
+                # If raw_data is a string (due to auto-serialization), parse it
+                if isinstance(raw_data, str):
+                    try:
+                        import json
+                        data_for_callback = json.loads(raw_data)
+                    except:
+                        data_for_callback = {"status": "error", "message": raw_data}
+                else:
+                    data_for_callback = raw_data
+
+                # 5. Call the callback with the surgical 1-liner
+                await log_callback(
+                    text=summary, 
+                    node="act",
+                    data=data_for_callback
+                )                    
     return final_response
 
 import ast

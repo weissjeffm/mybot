@@ -47,3 +47,17 @@ def generate_system_prompt():
     scraped URL.  """
     return prompt
 
+def to_data(obj):
+    """Recursively converts objects to dictionaries if possible."""
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    if isinstance(obj, dict):
+        return {k: to_data(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_data(x) for x in x]
+    
+    # If it has a __dict__, it's an object we can convert
+    if hasattr(obj, "__dict__"):
+        return vars(obj)
+    
+    return str(obj) # Fallback to string representation

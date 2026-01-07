@@ -4,6 +4,7 @@ import json
 import markdown
 import time
 import uuid
+import traceback
 from nio import AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent
 from langgraph_agent import run_agent_logic 
 
@@ -93,8 +94,11 @@ class MatrixBot:
         print(f"🤖 BOT DEVICE ID: {self.client.device_id}")
 
         print("📤 Uploading encryption keys to server...")
-        await self.client.keys_upload()
-        
+        try:
+            await self.client.keys_upload()
+        except:
+            None
+            
         # --- 2. RESUME SYNC TOKEN ---
         if os.path.exists("next_batch"):
             with open("next_batch", "r") as f:
@@ -119,6 +123,7 @@ class MatrixBot:
                         
             except Exception as e:
                 print(f"Sync error: {e}")
+                traceback.print_exc()
                 await asyncio.sleep(5)
                 
     async def invite_callback(self, room: MatrixRoom, event: InviteMemberEvent):
@@ -225,78 +230,56 @@ class MatrixBot:
         state = {
             "current_root": thread_root_id,
             "log_event_id": None,  # Track the ID of the 'thinking' message
-            "accumulated_logs": []
+            "accumulated_logs": [],
+            "thoughts": []
         }
 
         try:
             # --- 4. TOOL LOGGING CALLBACK (Optimized for Notifications) ---
-            async def log_callback(text):
-                print(f"DEBUG LOG: {text}") 
+            async def log_callback(text, node=None, data=None):
+                print(f"log_callback: {data}")
+                data = data or {}
+                status = data.get("status", "error")
+                msg = data.get("message", text) # Fallback to 'text' if data is empty
+    
+                # Simple logic-based emojis
+                if node == "reason":
+                    emoji = "⚙️"
+                else:
+                    emoji = "✅" if status == "ok" else "❌"
 
-                # 1. Handle Topic Changes (Existing logic)
-                if "TOPIC_CHANGE" in text and "{" in text:
-                    try:
-                        json_start = text.find('{')
-                        json_str = text[json_start:] 
-                        data = json.loads(json_str)
-                        if data.get("signal") == "TOPIC_CHANGE":
-                            subject = data.get("subject", "New Topic")
-                            original_link = f"https://matrix.to/#/{room.room_id}/{event.event_id}"
-                            new_header = await self.client.room_send(
-                                room_id=room.room_id,
-                                message_type="m.room.message",
-                                ignore_unverified_devices=True,
-                                content={
-                                    "msgtype": "m.text",
-                                    "body": f"🧵 New Topic: {subject}",
-                                    "format": "org.matrix.custom.html",
-                                    "formatted_body": f"<h3>🧵 {subject}</h3><p><i>Context: <a href='{original_link}'>Original Request</a></i></p>"
-                                }
-                            )
-                            state["current_root"] = new_header.event_id
-                            state["log_event_id"] = None # Reset log ID for new thread
-                            state["accumulated_logs"] = []
-                            return 
-                    except Exception as e:
-                        print(f"Topic change error: {e}")
-
-                # 2. Update the "Thinking" Message via Edit
-                state["accumulated_logs"].append(f"⚙️ {text}")
-                full_log_body = "\n".join(state["accumulated_logs"])
-                # Wrap in blockquote for visual distinction
-                html_log = f"<blockquote><font color='gray'>{'<br>'.join(state['accumulated_logs'])}</font></blockquote>"
+                clean_line = f"{emoji} {msg}"
+                state["thoughts"].append(clean_line)                    
+                # 2. UI Formatting (Matrix Notice + Edit)
+                # We only show the last 8 thoughts to keep the 'thinking box' tidy
+                display = state["thoughts"][-8:]
+                html_body = f"<blockquote><font color='gray'>{'<br>'.join(display)}</font></blockquote>"
 
                 content = {
-                    "msgtype": "m.notice", # Use m.notice to further deprioritize
-                    "body": f"* {full_log_body}", # '*' is standard Matrix prefix for edits
+                    "msgtype": "m.notice",
+                    "body": f"* Thinking...\n" + "\n".join(display),
                     "format": "org.matrix.custom.html",
-                    "formatted_body": html_log,
-                    "m.relates_to": {
-                        "rel_type": "m.thread",
-                        "event_id": state["current_root"]
-                    }
+                    "formatted_body": html_body,
+                    "m.relates_to": {"rel_type": "m.thread", "event_id": state["current_root"]}
                 }
 
-                # If we already have a log message, EDIT it. Otherwise, CREATE it.
+                # 3. Perform the 'Silent' Edit
                 if state["log_event_id"]:
                     content["m.new_content"] = {
                         "msgtype": "m.notice",
-                        "body": full_log_body,
+                        "body": "Thinking...\n" + "\n".join(display),
                         "format": "org.matrix.custom.html",
-                        "formatted_body": html_log
+                        "formatted_body": html_body
                     }
-                    content["m.relates_to"] = {
-                        "rel_type": "m.replace",
-                        "event_id": state["log_event_id"]
-                    }
-                
+                    content["m.relates_to"] = {"rel_type": "m.replace", "event_id": state["log_event_id"]}
+
                 resp = await self.client.room_send(
-                    room_id=room.room_id,
-                    message_type="m.room.message",
-                    ignore_unverified_devices=True,
-                    content=content
+                    room.room_id,
+                    "m.room.message",
+                    content=content,
+                    ignore_unverified_devices=True
                 )
-                
+
                 if not state["log_event_id"]:
                     state["log_event_id"] = resp.event_id
 
