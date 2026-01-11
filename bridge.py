@@ -7,7 +7,7 @@ import uuid
 import traceback
 from nio import AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent
 from langgraph_agent import run_agent_logic 
-
+from langchain_core.messages import HumanMessage, AIMessage
 from nio import (
     AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent, MegolmEvent,
     LocalProtocolError, ToDeviceEvent
@@ -143,28 +143,37 @@ class MatrixBot:
         except:
             return user_id
 
-    async def get_thread_history(self, room_id, thread_root_id, limit=30):
-        """Fetches and formats thread history."""
+    async def get_structured_history(self, room_id, thread_root_id, limit=30):
+        """Fetches history as LangChain message objects."""
         response = await self.client.room_messages(room_id, limit=limit)
-        if not response.chunk: return ""
+        if not response.chunk: 
+            return []
 
-        thread_events = []
+        messages = []
         for event in response.chunk:
-            if not isinstance(event, RoomMessageText): continue
-            
-            # Check if this event belongs to the thread
-            evt_id = event.event_id
+            if not isinstance(event, RoomMessageText): 
+                continue
+
+            # Determine if it's in our thread
             relates = event.source.get('content', {}).get('m.relates_to', {})
             parent_id = relates.get('event_id')
-            
-            if evt_id == thread_root_id or parent_id == thread_root_id:
-                sender = "AI_Agent" if event.sender == self.client.user_id else await self.get_display_name(event.sender)
-                # Skip tool logs to keep context clean
-                if "⚙️" in event.body: continue
-                thread_events.append(f"{sender}: {event.body}")
 
-        thread_events.reverse()
-        return "\n".join(thread_events)
+            if event.event_id == thread_root_id or parent_id == thread_root_id:
+                # 1. Filter out tool logs and notices to keep context clean
+                if "⚙️" in event.body or event.source.get("msgtype") == "m.notice":
+                    continue
+
+                # 2. Assign the correct Role
+                if event.sender == self.client.user_id:
+                    messages.append(AIMessage(content=event.body))
+                else:
+                    sender_name = await self.get_display_name(event.sender)
+                    # We still prefix the name in the content so the AI knows WHO is talking
+                    messages.append(HumanMessage(content=f"{sender_name}: {event.body}"))
+
+        # Matrix gives us the most recent first; LangGraph/LLMs need chronological
+        messages.reverse() 
+        return messages
 
     async def message_callback(self, room: MatrixRoom, event: RoomMessageText):
         if event.sender == self.client.user_id: return
@@ -237,7 +246,7 @@ class MatrixBot:
         try:
             # --- 4. TOOL LOGGING CALLBACK (Optimized for Notifications) ---
             async def log_callback(text, node=None, data=None):
-                print(f"log_callback: {data}")
+                print(f"log_callback for {node}: {data}")
                 data = data or {}
                 status = data.get("status", "error")
                 msg = data.get("message", text) # Fallback to 'text' if data is empty
@@ -308,13 +317,24 @@ class MatrixBot:
                     state["log_event_id"] = resp.event_id
 
             # --- 5. BUILD CONTEXT & RUN ---
-            history = await self.get_thread_history(room.room_id, state["current_root"])
-            prompt = f"HISTORY:\n{history}\n\nUSER ({sender_name}):\n{clean_body}"
-            
-            final_response = await run_agent_logic(prompt, log_callback=log_callback)
+            # Fetch the structured list of past messages
+            full_history = await self.get_structured_history(room.room_id, state["current_root"])
 
-            # --- 6. SEND FINAL ANSWER (As a fresh message) ---
-            html_response = markdown.markdown(final_response, extensions=['tables', 'fenced_code', 'nl2br'])
+            # Note: The 'current_message' from 'event.body' is already included in 
+            # full_history if the sync happened quickly, but to be safe and ensure 
+            # the prompt is exactly what was just typed:
+            if not full_history or full_history[-1].content != f"{sender_name}: {clean_body}":
+                full_history.append(HumanMessage(content=f"{sender_name}: {clean_body}"))
+
+            # Run the agent with the list
+            response = await run_agent_logic(full_history, log_callback=log_callback)
+
+            # address whoever addressed us
+            if is_mentioned:
+                response = f"{event.sender}: {response}"
+
+                # --- 6. SEND FINAL ANSWER (As a fresh message) ---
+            html_response = markdown.markdown(response, extensions=['tables', 'fenced_code', 'nl2br'])
 
             await self.client.room_send(
                 room_id=room.room_id,
@@ -322,12 +342,15 @@ class MatrixBot:
                 ignore_unverified_devices=True,
                 content={
                     "msgtype": "m.text",
-                    "body": final_response,
+                    "body": response,
                     "format": "org.matrix.custom.html",
                     "formatted_body": html_response,
                     "m.relates_to": {
                         "rel_type": "m.thread",
                         "event_id": state["current_root"]
+                    },
+                    "m.mentions": {
+                        "user_ids": [event.sender]
                     }
                 }
             )

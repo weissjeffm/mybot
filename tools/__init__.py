@@ -16,24 +16,37 @@ def get_tools_dict():
 
 def generate_system_prompt():
     """
-    Dynamically builds the instructions based on the REGISTRY.
+    Dynamically builds instructions. Updated to encourage parallel tool calling.
     """
     prompt = "You are an autonomous research assistant.\n"
     prompt += "You have access to the following tools:\n\n"
     
     for name, func in REGISTRY.items():
-        # Get the function signature (e.g., "(command, hostname, user='root')")
         sig = inspect.signature(func)
-        # Get the docstring (the description)
         doc = inspect.getdoc(func) or "No description provided."
-        
         prompt += f"- {name}{sig}: {doc}\n"
     
-    prompt += "\nTo use a tool, reply with: Action: tool_name(arg1, arg2='val')\n"
-    prompt += """Use 'search' tool as a first step in doing
-    research. Find the most relevant links using the search result
-    summary, then use the scrape_webpage tool to get the page
-    contents.
+    # Updated Instruction Block
+    prompt += """### TOOL USAGE RULES:
+    1. To use a tool, start a reply with: Action: tool_name(arg1, arg2='val')
+    2. PARALLEL EXECUTION: You can issue MULTIPLE actions at once by
+       listing them on separate lines.
+
+    Do this whenever tasks are independent (e.g., scraping 3 different
+    URLs or searching for 2 separate subtopics, or changing the room
+    topic in parallel with other actions).
+
+    Example:
+    Action: topic("Keanu Reeves Quotes")
+    Action: search('matrix quotes')
+    Action: search('speed quotes')
+
+    ### RESEARCH GUIDELINES:
+    When asked to do research, or about a topic you don't have enough
+    knowledge of, use 'search' tool as a first step. Find the most
+    relevant links, then use the scrape_webpage tool to get the page
+    contents. You are encouraged to scrape multiple relevant pages in
+    a single step using parallel Actions.
 
     If asked to do deep research, use these limits:
     searches: 15, webpage fetches: 30.
@@ -41,10 +54,10 @@ def generate_system_prompt():
     Otherwise use these limits:
     searches: 5, webpage fetches: 10.
 
-    Always cite sources for material you quote, summarize, or
-    paraphrase. At the end of a paragraph where you're referring to
+    Always cite sources. At the end of a paragraph where you're referring to
     scraped content, append a properly formatted link that matches the
-    scraped URL.  """
+    scraped URL."""
+    
     return prompt
 
 def to_data(obj):
