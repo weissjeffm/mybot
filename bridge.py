@@ -120,7 +120,14 @@ class MatrixBot:
                     self.client.next_batch = sync_response.next_batch
                     with open("next_batch", "w") as f:
                         f.write(sync_response.next_batch)
-                        
+            except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as e:
+                print(f"📡 Network error during sync: {e}. Retrying in 10s...")
+                await asyncio.sleep(10)
+            except aiohttp.ClientPayloadError:
+                print("⚠️ Matrix payload truncated. Forcing session reset...")
+                # This closes the underlying connector without logging out
+                await self.client.close() 
+                await asyncio.sleep(2)
             except Exception as e:
                 print(f"Sync error: {e}")
                 traceback.print_exc()
@@ -189,14 +196,11 @@ class MatrixBot:
         # Clean the prompt (remove bot name)
         clean_body = event.body.replace(self.client.user_id, "").replace("weissbot", "", 1).strip()
         sender_name = await self.get_display_name(event.sender)
-        # check if the user is just trying to verify via the matrix protocol
+        
+        # !verify check
         if clean_body == "!verify":
-            print(f"🔐 Scheduling verification request for {sender_name}...")
-            
-            # DEFINE THE TASK
             async def send_verify():
                 try:
-                    # Construct the content
                     content = {
                         "body": "🔐 Verification Request",
                         "msgtype": "m.key.verification.request",
@@ -206,157 +210,155 @@ class MatrixBot:
                         "timestamp": int(time.time() * 1000),
                         "transaction_id": str(uuid.uuid4())
                     }
-                    
-                    # SEND IT
                     await self.client.room_send(
                         room.room_id,
                         message_type="m.room.message",
                         content=content,
                         ignore_unverified_devices=True
                     )
-                    print("🔐 Request SENT successfully!")
                 except Exception as e:
                     print(f"🔐 Send failed: {e}")
 
-            # EXECUTE IN BACKGROUND (Breaks the Deadlock)
             asyncio.create_task(send_verify())
             return
        
         print(f"Processing request from {sender_name}: {clean_body}")
 
-        # --- 2. DETERMINE ROOT ---
+        # --- 2. DETERMINE THREAD ROOT ---
         content = event.source.get('content', {})
         relates_to = content.get('m.relates_to', {})
         is_in_thread = relates_to.get('rel_type') == 'm.thread'
-        
-        # Current Thread Root (or the message itself if new)
         thread_root_id = relates_to.get('event_id') if is_in_thread else event.event_id
 
         await self.client.room_typing(room.room_id, True, timeout=60000)
 
-
-        # --- 3. EXECUTION STATE ---
-        state = {
-            "current_root": thread_root_id,
-            "log_event_id": None,  # Track the ID of the 'thinking' message
-            "accumulated_logs": [],
-            "thoughts": []
+        # --- 3. UI/UX EXECUTION STATE ---
+        # This tracks the "Thinking..." board for this specific request
+        ui_state = {
+            "log_event_id": None,    # The ID of the notice we edit
+            "thoughts": [],          # Reasoning steps
+            "active_tools": {}       # Map of 'action_str' -> 'icon'
         }
 
         try:
-            # --- 4. TOOL LOGGING CALLBACK (Optimized for Notifications) ---
+            # --- 4. THE LOGGING CALLBACK (Handles the Status Board) ---
             async def log_callback(text, node=None, data=None):
-                print(f"log_callback for {node}: {data}")
                 data = data or {}
-                status = data.get("status", "error")
-                msg = data.get("message", text) # Fallback to 'text' if data is empty
-
-                # handle topic changes
-                # 1. Handle Topic Changes (Existing logic)
                 
-                if data.get("event") == "TOPIC_CHANGE":
-                    try:
-                        topic = data.get("topic", "")
-                        original_link = f"https://matrix.to/#/{room.room_id}/{event.event_id}"
-                        new_header = await self.client.room_send(
-                            room_id=room.room_id,
-                            message_type="m.room.message",
-                            ignore_unverified_devices=True,
-                            content={
-                                "msgtype": "m.text",
-                                "body": f"🧵 New Topic: {topic}",
-                                "format": "org.matrix.custom.html",
-                                "formatted_body": f"<h3>🧵 {topic}</h3><p><i>Context: <a href='{original_link}'>Original Request</a></i></p>"
-                                }
-                            )
-                        state["current_root"] = new_header.event_id
-                        state["log_event_id"] = None # Reset log ID for new thread
-                        state["accumulated_logs"] = []
-                        state["thoughts"] = []
-                    except Exception as e:
-                        print(f"Topic change error: {e}")
-                # Simple logic-based emojis
-                if node == "reason":
-                    emoji = "⚙️"
-                else:
-                    emoji = "✅" if status == "ok" else "❌"
+                # Update UI state based on Graph signals
+                if node == "act_start":
+                    for action in data.get("actions", []):
+                        ui_state["active_tools"][action] = "⚙️"
+                
+                elif node == "act_finish":
+                    for item in data.get("results", []):
+                        # item is {"action": str, "status": "ok"|"error"}
+                        icon = "✅" if item["status"] == "ok" else "❌"
+                        ui_state["active_tools"][item["action"]] = icon
+                
+                elif node == "reason":
+                    ui_state["thoughts"].append(text)
 
-                clean_line = f"{emoji} {msg}"
-                state["thoughts"].append(clean_line)                    
-                # 2. UI Formatting (Matrix Notice + Edit)
-                # We only show the last 8 thoughts to keep the 'thinking box' tidy
-                display = state["thoughts"][-8:]
-                html_body = f"<blockquote><font color='gray'>{'<br>'.join(display)}</font></blockquote>"
+                # REFRESH TYPING INDICATOR
+                # Every time a log comes in, we tell the server we are still working.
+                # We use a shorter timeout (30s) and just call it more often.
+                try:
+                    await self.client.room_typing(room.room_id, True, timeout=30000)
+                except:
+                    pass
+                
+                # Format the status board
+                display_lines = []
+                for t in ui_state["thoughts"][-2:]: # Show last 2 thoughts
+                    display_lines.append(f"💭 {t}")
+                for action, icon in ui_state["active_tools"].items():
+                    display_lines.append(f"{icon} {action}")
 
-                content = {
+                if not display_lines: return
+
+                full_body = "\n".join(display_lines)
+                html_body = f"<blockquote><font color='gray'>{'<br>'.join(display_lines)}</font></blockquote>"
+
+                msg_content = {
                     "msgtype": "m.notice",
-                    "body": f"* Thinking...\n" + "\n".join(display),
+                    "body": f"* Thinking...\n{full_body}",
                     "format": "org.matrix.custom.html",
                     "formatted_body": html_body,
-                    "m.relates_to": {"rel_type": "m.thread", "event_id": state["current_root"]}
+                    "m.relates_to": {"rel_type": "m.thread", "event_id": thread_root_id}
                 }
 
-                # 3. Perform the 'Silent' Edit
-                if state["log_event_id"]:
-                    content["m.new_content"] = {
+                if ui_state["log_event_id"]:
+                    # Edit the existing Thinking block
+                    msg_content["m.new_content"] = {
                         "msgtype": "m.notice",
-                        "body": "Thinking...\n" + "\n".join(display),
+                        "body": f"Thinking...\n{full_body}",
                         "format": "org.matrix.custom.html",
                         "formatted_body": html_body
                     }
-                    content["m.relates_to"] = {"rel_type": "m.replace", "event_id": state["log_event_id"]}
+                    msg_content["m.relates_to"] = {"rel_type": "m.replace", "event_id": ui_state["log_event_id"]}
 
                 resp = await self.client.room_send(
-                    room.room_id,
-                    "m.room.message",
-                    content=content,
+                    room.room_id, "m.room.message", 
+                    content=msg_content, 
                     ignore_unverified_devices=True
                 )
 
-                if not state["log_event_id"]:
-                    state["log_event_id"] = resp.event_id
+                if not ui_state["log_event_id"]:
+                    ui_state["log_event_id"] = resp.event_id
 
-            # --- 5. BUILD CONTEXT & RUN ---
-            # Fetch the structured list of past messages
-            full_history = await self.get_structured_history(room.room_id, state["current_root"])
+            # --- 5. RUN AGENT ---
+            # Fetch structured history
+            try:
+                full_history = await self.get_structured_history(room.room_id, thread_root_id)
 
-            # Note: The 'current_message' from 'event.body' is already included in 
-            # full_history if the sync happened quickly, but to be safe and ensure 
-            # the prompt is exactly what was just typed:
-            if not full_history or full_history[-1].content != f"{sender_name}: {clean_body}":
-                full_history.append(HumanMessage(content=f"{sender_name}: {clean_body}"))
+                # Ensure current prompt is at the end
+                if not full_history or full_history[-1].content != f"{sender_name}: {clean_body}":
+                    full_history.append(HumanMessage(content=f"{sender_name}: {clean_body}"))
 
-            # Run the agent with the list
-            response = await run_agent_logic(full_history, log_callback=log_callback)
+                # Wrap the logic in a timeout to prevent "spinning forever"
+                response = await asyncio.wait_for(
+                    run_agent_logic(full_history, log_callback=log_callback),
+                    timeout=300 # 5-minute total cap for the whole agent process
+                )  
 
-            # address whoever addressed us
-            if is_mentioned:
-                response = f"{event.sender}: {response}"
+                if is_mentioned:
+                    response = f"{sender_name}: {response}"
 
-                # --- 6. SEND FINAL ANSWER (As a fresh message) ---
-            html_response = markdown.markdown(response, extensions=['tables', 'fenced_code', 'nl2br'])
+                # --- 6. SEND FINAL ANSWER ---
+                html_response = markdown.markdown(response, extensions=['tables', 'fenced_code', 'nl2br'])
 
-            await self.client.room_send(
-                room_id=room.room_id,
-                message_type="m.room.message",
-                ignore_unverified_devices=True,
-                content={
-                    "msgtype": "m.text",
-                    "body": response,
-                    "format": "org.matrix.custom.html",
-                    "formatted_body": html_response,
-                    "m.relates_to": {
-                        "rel_type": "m.thread",
-                        "event_id": state["current_root"]
-                    },
-                    "m.mentions": {
-                        "user_ids": [event.sender]
+                await self.client.room_send(
+                    room_id=room.room_id,
+                    message_type="m.room.message",
+                    ignore_unverified_devices=True,
+                    content={
+                        "msgtype": "m.text",
+                        "body": response,
+                        "format": "org.matrix.custom.html",
+                        "formatted_body": html_response,
+                        "m.relates_to": {
+                            "rel_type": "m.thread",
+                            "event_id": thread_root_id
+                        },
+                        "m.mentions": {"user_ids": [event.sender]}
                     }
-                }
-            )
+                )
+            except asyncio.TimeoutError:
+                await log_callback("⚠️ The request took too long and timed out.", node="error")
+                response = "I'm sorry, that research task was too complex and timed out."
+            except Exception as e:
+                print(f"Error in message_callback: {e}")
+                traceback.print_exc()
+                await log_callback(f"❌ System Error: {str(e)}", node="error")
+                response = f"I encountered a technical error: {str(e)}"
+            finally:
+                await self.client.room_typing(room.room_id, False)
 
+        except Exception as e:
+            print(f"Error in message_callback: {e}")
+            traceback.print_exc()
         finally:
-            await self.client.room_typing(room.room_id, False)
+            await self.client.room_typing(room.room_id, False)    
             
     async def decryption_failure_callback(self, room: MatrixRoom, event: MegolmEvent):
         print(f"🔒 Encrypted message (Session: {event.session_id}) from {event.sender}")

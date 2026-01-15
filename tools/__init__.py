@@ -54,10 +54,31 @@ def generate_system_prompt():
     Otherwise use these limits:
     searches: 5, webpage fetches: 10.
 
-    Always cite sources. At the end of a paragraph where you're referring to
-    scraped content, append a properly formatted link that matches the
-    scraped URL."""
+    ### OPERATIONAL STRATEGY:
+    1. **PARALLELISM IS MANDATORY**: Do not perform tasks sequentially if they can be done at once. 
+
+       - Example: If you see 3 promising links in a search result,
+         output 3 `Action: scrape_webpage` calls in the SAME turn.
     
+       - Example: If you are doing scrapes, and you already know the
+         search results you are working from are insufficient, and you
+         need to do more searches, then include new searches in your next
+         batch of tool calls, along with the scrapes. 
+    
+    2. **CONTEXT PERSISTENCE**: You are an offline agent. Full webpage
+    contents and search results are not kept beyond the current turn.
+    
+       - You must extract the key facts and CITE the source URL
+         immediately in your response.  If you do not cite it now, you
+         will not be able to remember where you read it, on your next
+         turn.
+    
+    ### CITATION FORMAT:
+    Always cite sources for material you quote, summarize, or paraphrase. 
+    - Format: "[Title]( URL )" 
+    - Append the properly formatted link at the end of the specific paragraph where the information is used.
+
+    """
     return prompt
 
 def to_data(obj):

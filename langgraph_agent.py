@@ -14,7 +14,9 @@ llm = ChatOpenAI(
     api_key="sk-50cf096cc7c795865e",
     model="qwen3-235b-a22b-instruct-2507", # Match your LocalAI model name
     temperature=0,
-    max_tokens=102400
+    max_tokens=2048,
+    timeout=600,
+    max_retries=2
 )
 
 TOOLS = get_tools_dict() # Automatically loads ssh, ipmi, etc.
@@ -44,56 +46,76 @@ import re
 import uuid
 import json
 
+# langgraph_agent.py refinements
+
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], operator.add]
+    current_thought: str
+    log_callback: any # Added to state so nodes can signal UI updates
+
 async def act_node(state: AgentState):
-    """
-    The Hands: Executes multiple tools in parallel. 
-    Only parses lines that strictly start with 'Action:'.
-    """
+    """Executes tools in parallel and signals the UI Status Board."""
     last_message = state['messages'][-1].content
+    log_callback = state['log_callback']
     
-    # 1. Extract only strict Action lines
+    # 1. Strict extraction of Action lines
     action_strings = []
     for line in last_message.splitlines():
-        clean_line = line.strip()
-        if clean_line.startswith("Action:"):
-            # Strip the prefix to get the function call string
-            action_strings.append(clean_line[7:].strip())
+        if line.strip().startswith("Action:"):
+            action_strings.append(line.strip()[7:].strip())
 
     if not action_strings:
-        # This shouldn't happen if should_continue is working, 
-        # but it's a safe guard.
-        return {"messages": [ToolMessage(content="Error: No valid Actions found.", tool_call_id="err")]}
+        return {"messages": [ToolMessage(content="Error: No actions found", tool_call_id="err")]}
 
-    # 2. Parallel Execution Logic
+    # 2. SIGNAL UI: Start Parallel Batch (Gears)
+    await log_callback(text="Starting batch...", node="act_start", data={"actions": action_strings})
+
+    # 3. Parallel Execution
     loop = asyncio.get_event_loop()
-    
-    async def run_tool(action_str):
-        # We wrap the sync safe_execute_tool in a thread pool 
-        # to prevent blocking and allow true parallelism.
-        result = await loop.run_in_executor(None, safe_execute_tool, action_str, TOOLS)
-        return result
-
-    # 3. Fire all tool calls simultaneously
-    # If the bot requested 5 scrapes, they all start now.
-    tasks = [run_tool(act) for act in action_strings]
-    print(f"Started {len(tasks)} tool tasks")
+    tasks = [loop.run_in_executor(None, safe_execute_tool, act, TOOLS) for act in action_strings]
     results = await asyncio.gather(*tasks)
-    print(f"Finished {len(tasks)} tool tasks")
 
-    # 4. Construct ToolMessages
-    # LangGraph expects a 1:1 mapping of tool calls to results.
+    # 4. SIGNAL UI: Batch Complete (Checkboxes)
+    # Mapping results back to actions for the UI
+    batch_results = []
+    for i, res in enumerate(results):
+        status = "ok" if not str(res).startswith("Error") else "error"
+        batch_results.append({"action": action_strings[i], "status": status})
+    
+    await log_callback(text="Batch complete.", node="act_finish", data={"results": batch_results})
+
+    # 5. Return ToolMessages
     new_messages = []
     for res in results:
         new_messages.append(ToolMessage(
-            content=json.dumps(res), 
+            content=json.dumps(res) if isinstance(res, dict) else str(res), 
             tool_call_id=f"call_{uuid.uuid4().hex[:8]}"
         ))
-    print(f"Executed {len(results)} actions in parallel.")
-    return {
-        "messages": new_messages,
-        "current_thought": f"Executed {len(results)} actions in parallel."
+    
+    return {"messages": new_messages, "current_thought": "Tools complete."}
+
+async def run_agent_logic(messages: List[BaseMessage], log_callback):
+    # Pass log_callback into the initial state
+    initial_state = {
+        "messages": messages, 
+        "current_thought": "",
+        "log_callback": log_callback
     }
-# --- 6. THE GRAPH LOGIC ---
+    
+    final_response = ""
+    config = {"recursion_limit": 100}
+    
+    async for event in app.astream(initial_state, config=config):
+        for node_name, state_update in event.items():
+            if node_name == "reason":
+                thought = state_update['current_thought']
+                if "Action:" in thought:
+                    # Optional: Log that the brain is thinking
+                    await log_callback("Formulating plan...", node="reason")
+                else:
+                    final_response = thought
+    return final_response
+
 def should_continue(state: AgentState):
     """
     Checks if the last message contains any valid tool triggers 
@@ -125,37 +147,6 @@ workflow.add_conditional_edges(
 workflow.add_edge("act", "reason") # Loop back to Brain after Tool
 
 app = workflow.compile()
-
-async def run_agent_logic(messages: List[BaseMessage], log_callback):
-    """
-    Accepts a structured list of messages.
-    """
-    # Initialize state with the history we were given
-    initial_state = {
-        "messages": messages, 
-        "current_thought": ""
-    }
-    
-    final_response = ""
-    config = {"recursion_limit": 100}
-    
-    async for event in app.astream(initial_state, config=config):
-        # ... (rest of your existing loop logic stays the same)
-        for node_name, state_update in event.items():
-            if node_name == "reason":
-                thought = state_update['current_thought']
-                if "Action:" in thought:
-                    # Logic to extract tool name for logging
-                    try:
-                        tool = thought.split('Action:')[1].split('(')[0].strip()
-                        await log_callback(f"Using tool: {tool}", node="reason", data={"tool": tool})
-                    except:
-                        await log_callback("Thinking...", node="reason")
-                else:
-                    final_response = thought
-            # ... act_node logic ...
-            
-    return final_response
 
 import ast
 
