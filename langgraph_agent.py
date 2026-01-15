@@ -27,6 +27,7 @@ class AgentState(TypedDict):
     # 'operator.add' means: when we return new messages, APPEND them to this list
     messages: Annotated[List[BaseMessage], operator.add]
     current_thought: str
+    log_callback: any
 
 # --- 5. THE NODES ---
 
@@ -37,7 +38,9 @@ async def reason_node(state: AgentState):
     # Call Qwen
     response = await llm.ainvoke(messages)
     content = response.content
-    
+    if content.strip().startswith("Action:"):
+        asyncio.create_task(state['log_callback']("Formulating plan...", node="reason"))
+        
     return {"messages": [response], "current_thought": content}
 
 # In langgraph_agent.py
@@ -54,44 +57,35 @@ class AgentState(TypedDict):
     log_callback: any # Added to state so nodes can signal UI updates
 
 async def act_node(state: AgentState):
-    """Executes tools in parallel and signals the UI Status Board."""
+    """The Hands: Parallel Execution with non-blocking UI updates."""
     last_message = state['messages'][-1].content
     log_callback = state['log_callback']
     
-    # 1. Strict extraction of Action lines
-    action_strings = []
-    for line in last_message.splitlines():
-        if line.strip().startswith("Action:"):
-            action_strings.append(line.strip()[7:].strip())
+    # 1. Parse actions
+    action_strings = [line.strip()[7:].strip() for line in last_message.splitlines() if line.strip().startswith("Action:")]
 
     if not action_strings:
-        return {"messages": [ToolMessage(content="Error: No actions found", tool_call_id="err")]}
+        return {"messages": [ToolMessage(content="Error", tool_call_id="err")]}
 
-    # 2. SIGNAL UI: Start Parallel Batch (Gears)
-    await log_callback(text="Starting batch...", node="act_start", data={"actions": action_strings})
+    # 2. SIGNAL UI: Non-blocking "Start" signal
+    # create_task ensures we don't wait for Matrix to respond before starting tools
+    asyncio.create_task(log_callback(text="Starting tools...", node="act_start", data={"actions": action_strings}))
 
-    # 3. Parallel Execution
+    # 3. Parallel Tool Execution (The priority!)
     loop = asyncio.get_event_loop()
     tasks = [loop.run_in_executor(None, safe_execute_tool, act, TOOLS) for act in action_strings]
     results = await asyncio.gather(*tasks)
 
-    # 4. SIGNAL UI: Batch Complete (Checkboxes)
-    # Mapping results back to actions for the UI
+    # 4. SIGNAL UI: Non-blocking "Finish" signal
     batch_results = []
     for i, res in enumerate(results):
         status = "ok" if not str(res).startswith("Error") else "error"
         batch_results.append({"action": action_strings[i], "status": status})
     
-    await log_callback(text="Batch complete.", node="act_finish", data={"results": batch_results})
+    asyncio.create_task(log_callback(text="Batch complete.", node="act_finish", data={"results": batch_results}))
 
-    # 5. Return ToolMessages
-    new_messages = []
-    for res in results:
-        new_messages.append(ToolMessage(
-            content=json.dumps(res) if isinstance(res, dict) else str(res), 
-            tool_call_id=f"call_{uuid.uuid4().hex[:8]}"
-        ))
-    
+    # 5. Build ToolMessages for the next reasoning step
+    new_messages = [ToolMessage(content=str(r), tool_call_id=f"call_{uuid.uuid4().hex[:8]}") for r in results]
     return {"messages": new_messages, "current_thought": "Tools complete."}
 
 async def run_agent_logic(messages: List[BaseMessage], log_callback):

@@ -47,7 +47,7 @@ class MatrixBot:
             "@weissbot:matrix.org",
             store_path=store_folder
         )
-
+        self.ui_lock = asyncio.Lock()
         self.pending_events = {} # Stores session_id -> list of MegolmEvents
 
     async def start(self):
@@ -239,72 +239,75 @@ class MatrixBot:
             "thoughts": [],          # Reasoning steps
             "active_tools": {}       # Map of 'action_str' -> 'icon'
         }
+        
+        ui_lock = asyncio.Lock()
 
         try:
             # --- 4. THE LOGGING CALLBACK (Handles the Status Board) ---
             async def log_callback(text, node=None, data=None):
-                data = data or {}
-                
-                # Update UI state based on Graph signals
-                if node == "act_start":
-                    for action in data.get("actions", []):
-                        ui_state["active_tools"][action] = "⚙️"
-                
-                elif node == "act_finish":
-                    for item in data.get("results", []):
-                        # item is {"action": str, "status": "ok"|"error"}
-                        icon = "✅" if item["status"] == "ok" else "❌"
-                        ui_state["active_tools"][item["action"]] = icon
-                
-                elif node == "reason":
-                    ui_state["thoughts"].append(text)
+                async with self.ui_lock:
+                    data = data or {}
 
-                # REFRESH TYPING INDICATOR
-                # Every time a log comes in, we tell the server we are still working.
-                # We use a shorter timeout (30s) and just call it more often.
-                try:
-                    await self.client.room_typing(room.room_id, True, timeout=30000)
-                except:
-                    pass
-                
-                # Format the status board
-                display_lines = []
-                for t in ui_state["thoughts"][-2:]: # Show last 2 thoughts
-                    display_lines.append(f"💭 {t}")
-                for action, icon in ui_state["active_tools"].items():
-                    display_lines.append(f"{icon} {action}")
+                    # Update UI state based on Graph signals
+                    if node == "act_start":
+                        for action in data.get("actions", []):
+                            ui_state["active_tools"][action] = "⚙️"
 
-                if not display_lines: return
+                    elif node == "act_finish":
+                        for item in data.get("results", []):
+                            # item is {"action": str, "status": "ok"|"error"}
+                            icon = "✅" if item["status"] == "ok" else "❌"
+                            ui_state["active_tools"][item["action"]] = icon
 
-                full_body = "\n".join(display_lines)
-                html_body = f"<blockquote><font color='gray'>{'<br>'.join(display_lines)}</font></blockquote>"
+                    elif node == "reason":
+                        ui_state["thoughts"].append(text)
 
-                msg_content = {
-                    "msgtype": "m.notice",
-                    "body": f"* Thinking...\n{full_body}",
-                    "format": "org.matrix.custom.html",
-                    "formatted_body": html_body,
-                    "m.relates_to": {"rel_type": "m.thread", "event_id": thread_root_id}
-                }
+                    # REFRESH TYPING INDICATOR
+                    # Every time a log comes in, we tell the server we are still working.
+                    # We use a shorter timeout (30s) and just call it more often.
+                    try:
+                        await self.client.room_typing(room.room_id, True, timeout=30000)
+                    except:
+                        pass
 
-                if ui_state["log_event_id"]:
-                    # Edit the existing Thinking block
-                    msg_content["m.new_content"] = {
+                    # Format the status board
+                    display_lines = []
+                    for t in ui_state["thoughts"][-2:]: # Show last 2 thoughts
+                        display_lines.append(f"💭 {t}")
+                    for action, icon in ui_state["active_tools"].items():
+                        display_lines.append(f"{icon} {action}")
+
+                    if not display_lines: return
+
+                    full_body = "\n".join(display_lines)
+                    html_body = f"<blockquote><font color='gray'>{'<br>'.join(display_lines)}</font></blockquote>"
+
+                    msg_content = {
                         "msgtype": "m.notice",
-                        "body": f"Thinking...\n{full_body}",
+                        "body": f"* Thinking...\n{full_body}",
                         "format": "org.matrix.custom.html",
-                        "formatted_body": html_body
+                        "formatted_body": html_body,
+                        "m.relates_to": {"rel_type": "m.thread", "event_id": thread_root_id}
                     }
-                    msg_content["m.relates_to"] = {"rel_type": "m.replace", "event_id": ui_state["log_event_id"]}
 
-                resp = await self.client.room_send(
-                    room.room_id, "m.room.message", 
-                    content=msg_content, 
-                    ignore_unverified_devices=True
-                )
+                    if ui_state["log_event_id"]:
+                        # Edit the existing Thinking block
+                        msg_content["m.new_content"] = {
+                            "msgtype": "m.notice",
+                            "body": f"Thinking...\n{full_body}",
+                            "format": "org.matrix.custom.html",
+                            "formatted_body": html_body
+                        }
+                        msg_content["m.relates_to"] = {"rel_type": "m.replace", "event_id": ui_state["log_event_id"]}
 
-                if not ui_state["log_event_id"]:
-                    ui_state["log_event_id"] = resp.event_id
+                    resp = await self.client.room_send(
+                        room.room_id, "m.room.message", 
+                        content=msg_content, 
+                        ignore_unverified_devices=True
+                    )
+
+                    if not ui_state["log_event_id"]:
+                        ui_state["log_event_id"] = resp.event_id
 
             # --- 5. RUN AGENT ---
             # Fetch structured history
