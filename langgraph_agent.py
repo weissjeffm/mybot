@@ -20,7 +20,6 @@ llm = ChatOpenAI(
 )
 
 TOOLS = get_tools_dict() # Automatically loads ssh, ipmi, etc.
-SYSTEM_PROMPT = generate_system_prompt() # Automatically writes the instructions
 
 # --- 3. THE STATE ---
 class AgentState(TypedDict):
@@ -33,7 +32,8 @@ class AgentState(TypedDict):
 
 async def reason_node(state: AgentState):
     """The Brain: Decides what to do."""
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state['messages']
+    bot_name = state.get("bot_name", "Assistant") 
+    messages = [SystemMessage(content=generate_system_prompt(bot_name))] + state['messages']
     
     # Call Qwen
     response = await llm.ainvoke(messages)
@@ -55,7 +55,8 @@ class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
     current_thought: str
     log_callback: any # Added to state so nodes can signal UI updates
-
+    bot_name: str
+    
 async def act_node(state: AgentState):
     """The Hands: Parallel Execution with non-blocking UI updates."""
     last_message = state['messages'][-1].content
@@ -88,13 +89,8 @@ async def act_node(state: AgentState):
     new_messages = [ToolMessage(content=str(r), tool_call_id=f"call_{uuid.uuid4().hex[:8]}") for r in results]
     return {"messages": new_messages, "current_thought": "Tools complete."}
 
-async def run_agent_logic(messages: List[BaseMessage], log_callback):
+async def run_agent_logic(initial_state: AgentState):
     # Pass log_callback into the initial state
-    initial_state = {
-        "messages": messages, 
-        "current_thought": "",
-        "log_callback": log_callback
-    }
     
     final_response = ""
     config = {"recursion_limit": 100}
@@ -105,7 +101,7 @@ async def run_agent_logic(messages: List[BaseMessage], log_callback):
                 thought = state_update['current_thought']
                 if "Action:" in thought:
                     # Optional: Log that the brain is thinking
-                    await log_callback("Formulating plan...", node="reason")
+                    await initial_state["log_callback"]("Formulating plan...", node="reason")
                 else:
                     final_response = thought
     return final_response

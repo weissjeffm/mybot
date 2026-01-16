@@ -28,7 +28,7 @@ async def process_message(bot, room, event):
     
     # 2. Handle Text
     elif hasattr(event, "body"):
-        clean_body = event.body.replace(bot.client.user_id, "").replace("weissbot", "", 1).strip()
+        clean_body = event.body.replace(bot.client.user_id, "").replace(bot.short_name, "", 1).strip()
 
     if not clean_body: return
 
@@ -39,7 +39,7 @@ async def process_message(bot, room, event):
 
     # 4. Gatekeeper
     is_direct = room.member_count <= 2
-    is_mentioned = ("weissbot" in clean_body.lower()) or (bot.client.user_id in str(event.source))
+    is_mentioned = (bot.short_name in clean_body.lower()) or (bot.client.user_id in str(event.source))
     if not (is_direct or is_mentioned or is_audio):
         return
 
@@ -87,8 +87,14 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body):
     try:
         history = await get_structured_history(bot, room.room_id, thread_root_id)
         history.append(HumanMessage(content=f"{sender_name}: {clean_body}"))
+
+        initial_state = {
+            "messages": history,
+            "bot_name": await bot.display_name or bot.short_name or "Assistant",
+            "log_callback": log_callback
+        }
         
-        response = await asyncio.wait_for(run_agent_logic(history, log_callback=log_callback), timeout=300)
+        response = await asyncio.wait_for(run_agent_logic(initial_state), timeout=300)
         
         html_response = markdown.markdown(response, extensions=['tables', 'fenced_code', 'nl2br'])
         await bot.client.room_send(
