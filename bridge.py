@@ -1,3 +1,5 @@
+import logging
+import sys
 import asyncio
 import os
 import json
@@ -5,16 +7,14 @@ import markdown
 import time
 import uuid
 import traceback
-from nio import AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent
 from langgraph_agent import run_agent_logic 
 from langchain_core.messages import HumanMessage, AIMessage
 from nio import (
-    AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent, MegolmEvent,
-    LocalProtocolError, ToDeviceEvent
+    AsyncClient, MatrixRoom, RoomMessageText, InviteMemberEvent, Event, MegolmEvent,
+    LocalProtocolError, ToDeviceEvent, RoomMessageAudio, RoomEncryptedAudio
 )
-
-import logging
-import sys
+from nio.crypto import decrypt_attachment # Necessary for encrypted voice notes
+import aiohttp
 
 # # Configure logging to print to the terminal
 # logging.basicConfig(
@@ -106,9 +106,14 @@ class MatrixBot:
 
         # --- 3. REGISTER CALLBACKS ---
         self.client.add_event_callback(self.message_callback, RoomMessageText)
+        #self.client.add_event_callback(self.message_callback, MegolmEvent)
+        self.client.add_event_callback(self.message_callback, RoomMessageAudio)
+        self.client.add_event_callback(self.message_callback, RoomEncryptedAudio)
         self.client.add_event_callback(self.invite_callback, InviteMemberEvent)
         self.client.add_event_callback(self.decryption_failure_callback, MegolmEvent)
         self.client.add_to_device_callback(self.cb_key_arrived, ToDeviceEvent)
+        # debugger callback
+        self.client.add_event_callback(self.universal_debug_callback, Event)
         
         print(f"Bot is listening... (Resuming from: {self.client.next_batch})")
 
@@ -132,7 +137,24 @@ class MatrixBot:
                 print(f"Sync error: {e}")
                 traceback.print_exc()
                 await asyncio.sleep(5)
-                
+
+    async def universal_debug_callback(self, room: MatrixRoom, event: Event):
+        # This will print for EVERY single thing (typing, receipts, messages)
+        print(f"📡 [RAW EVENT] Type: {type(event).__name__} | Sender: {event.sender}")
+
+        # Check if it's an encrypted message that hasn't been handled
+        if isinstance(event, MegolmEvent):
+            print(f"  └─ 🔒 Encrypted MegolmEvent (Session: {event.session_id})")
+
+        # Check if it has a body (most messages do)
+        if hasattr(event, "body"):
+            print(f"  └─ 💬 Body Snippet: {event.body[:50]}")
+
+        # Check for audio msgtype in the raw source
+        msgtype = event.source.get("content", {}).get("msgtype")
+        if msgtype:
+            print(f"  └─ 🏷️ MsgType: {msgtype}")
+            
     async def invite_callback(self, room: MatrixRoom, event: InviteMemberEvent):
         """Auto-join rooms."""
         print(f"Invite received for room {room.room_id}!")
@@ -183,8 +205,78 @@ class MatrixBot:
         return messages
 
     async def message_callback(self, room: MatrixRoom, event: RoomMessageText):
+        # if it's the bot's own message, nothing to do
         if event.sender == self.client.user_id: return
+        
+        #print(f"DEBUG: Received event type {type(event)} from {event.sender}")
+        clean_body = ""
+        if isinstance(event, (RoomMessageAudio, RoomEncryptedAudio)):
+            print(f"🎙️ [AUDIO DETECTED] Type: {type(event).__name__}")
 
+            # RoomEncryptedAudio has the 'file' dict directly on the event object
+            # whereas RoomMessageAudio might have it in 'source'
+            audio_bytes = None
+            try:
+                # 1. Check for Encrypted Metadata (multiple possible nio locations)
+                file_info = None
+                if hasattr(event, 'file') and event.file:
+                    # Type: nio.events.room_events.EncryptedFile
+                    file_info = event.file
+                elif 'file' in event.source.get('content', {}):
+                    # Type: dictionary (fallback)
+                    file_info = event.source['content']['file']
+
+                if file_info:
+                    print(f"🔐 Found encryption metadata. Downloading from {getattr(file_info, 'url', file_info.get('url'))}")
+
+                    # Handle both object and dict access for the URL
+                    mxc_url = getattr(file_info, 'url', file_info.get('url'))
+                    resp = await self.client.download(mxc_url)
+                    ciphertext = resp.body
+
+                    # Extract keys (handle both object and dict)
+                    key = getattr(file_info, 'key', file_info.get('key'))['k']
+                    iv = getattr(file_info, 'iv', file_info.get('iv'))
+                    hashes = getattr(file_info, 'hashes', file_info.get('hashes'))['sha256']
+
+                    from nio.crypto import decrypt_attachment
+                    audio_bytes = decrypt_attachment(ciphertext, key, hashes, iv)
+                    print(f"✅ Decryption successful. Bytes: {len(audio_bytes)}")
+                else:
+                    # 2. Plain Attachment Branch
+                    print("📂 No encryption metadata found. Treating as plain audio.")
+                    resp = await self.client.download(event.url)
+                    audio_bytes = resp.body
+
+                # 3. Validation
+                if not audio_bytes or len(audio_bytes) < 500:
+                    print(f"❌ Audio extraction failed. Byte count: {len(audio_bytes)}")
+                    return
+            
+                # 3. TRANSCRIBE
+                if audio_bytes:
+                    await self.client.room_typing(room.room_id, True)
+                    transcript = await self.transcribe_audio(audio_bytes, "voice_note.ogg")
+                    if transcript:
+                        print(f"📝 Transcript: {transcript}")
+                        clean_body = f"[Transcription of a voice message from {sender_name}]: {transcript}"
+
+                    else:
+                        return
+            except Exception as e:
+                print(f"❌ Error processing audio: {e}")
+                return
+
+        elif isinstance(event, RoomMessageText):
+            # Clean the prompt (remove bot name)
+            clean_body = event.body.replace(self.client.user_id, "").replace("weissbot", "", 1).strip()
+            
+
+        sender_name = await self.get_display_name(event.sender)
+        
+        # If it's not text or audio (like a file or image), we ignore it
+        if not clean_body:
+            return
         # --- 1. GATEKEEPER (Group Chat Logic) ---
         is_direct = room.member_count <= 2
         is_mentioned = (self.client.user_id in event.body) or ("weissbot" in event.body.lower())
@@ -193,10 +285,6 @@ class MatrixBot:
         if not (is_direct or is_mentioned):
             return
 
-        # Clean the prompt (remove bot name)
-        clean_body = event.body.replace(self.client.user_id, "").replace("weissbot", "", 1).strip()
-        sender_name = await self.get_display_name(event.sender)
-        
         # !verify check
         if clean_body == "!verify":
             async def send_verify():
@@ -363,6 +451,37 @@ class MatrixBot:
         finally:
             await self.client.room_typing(room.room_id, False)    
             
+    async def transcribe_audio(self, audio_bytes, filename):
+        """Sends audio bytes to LocalAI with authentication."""
+        stt_url = "http://localhost:8080/v1/audio/transcriptions"
+
+        # Use the same key as your LLM config
+        api_key = "sk-50cf096cc7c795865e" 
+
+        headers = {
+            "Authorization": f"Bearer {api_key}"
+        }
+
+        data = aiohttp.FormData()
+        data.add_field('file', audio_bytes, filename=filename, content_type='application/octet-stream')
+        data.add_field('model', 'whisper-large')
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(stt_url, data=data, headers=headers) as resp:
+                    if resp.status == 200:
+                        json_resp = await resp.json()
+                        return json_resp.get("text", "")
+                    elif resp.status == 401:
+                        print("❌ STT Error: Unauthorized. Check your LocalAI API key.")
+                        return None
+                    else:
+                        print(f"❌ STT Error: {resp.status} - {await resp.text()}")
+                        return None
+        except Exception as e:
+            print(f"⚠️ Transcription failure: {e}")
+            return None
+        
     async def decryption_failure_callback(self, room: MatrixRoom, event: MegolmEvent):
         print(f"🔒 Encrypted message (Session: {event.session_id}) from {event.sender}")
         
