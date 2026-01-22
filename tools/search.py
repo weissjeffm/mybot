@@ -1,7 +1,7 @@
 from ddgs import DDGS
 import json
 
-def search_web(query: str, max_results=5):
+def search_web(query: str, max_results=15):
     """
     Searches the web using DuckDuckGo.
     How to search:
@@ -23,11 +23,11 @@ def search_web(query: str, max_results=5):
     try:
         with DDGS() as ddgs:
             # Try API first
-            search_results = list(ddgs.text(query, max_results=max_results, backend="api"))
+            search_results = list(ddgs.text(query, max_results=max_results, backend="html"))
             
-            # Fallback to HTML
+            # Fallback to api
             if not search_results:
-                search_results = list(ddgs.text(query, max_results=max_results, backend="html"))
+                search_results = list(ddgs.text(query, max_results=max_results, backend="api"))
 
             
             if search_results:

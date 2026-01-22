@@ -94,7 +94,7 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body):
             "log_callback": log_callback
         }
         
-        response = await asyncio.wait_for(run_agent_logic(initial_state), timeout=300)
+        response = await asyncio.wait_for(run_agent_logic(initial_state), timeout=600)
         
         html_response = markdown.markdown(response, extensions=['tables', 'fenced_code', 'nl2br'])
         await bot.client.room_send(

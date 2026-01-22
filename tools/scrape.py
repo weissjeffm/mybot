@@ -4,6 +4,11 @@ import json
 #from .utils import to_data
 
 def scrape_url(url: str):
+    """Retrieve the text of a webpage given a URL. You can get URLs
+    from: Search tool resuls, previous chat history, previous scrape
+    tool results.
+
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -24,7 +29,7 @@ def scrape_url(url: str):
             if "Please complete the security check" in response.text:
                 result["message"] = "Blocked by CAPTCHA/Cloudflare."
             else:
-                text = trafilatura.extract(response.text, include_comments=False, include_tables=True)
+                text = trafilatura.extract(response.text, include_comments=False, include_tables=True, include_links=True)
                 if text:
                     result["status"] = "ok"
                     result["result"] = text
