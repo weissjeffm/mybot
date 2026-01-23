@@ -13,7 +13,7 @@ async def process_message(bot, room, event):
     # Fix: Get sender_name at top to prevent UnboundLocalError
     sender_name = await get_display_name(bot, event.sender)
     clean_body = ""
-
+    
     # 1. Handle Audio
     is_audio = "audio" in str(type(event)).lower()
     if is_audio:
@@ -29,9 +29,10 @@ async def process_message(bot, room, event):
     # 2. Handle Text
     elif hasattr(event, "body"):
         clean_body = event.body.replace(bot.client.user_id, "").replace(bot.short_name, "", 1).strip()
-
+   
     if not clean_body: return
 
+    print(f"📥 Message from {sender_name}: {clean_body[:120]}{'...' if len(clean_body) > 120 else ''}")
     # 3. Auth Commands
     if clean_body == "!verify":
         await handle_verification_request(bot.client, room.room_id, event.sender)
@@ -125,9 +126,11 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
 
             # Update thread_root_id for the bot's reply
             thread_root_id = new_thread_root_id
+            print(f"🔄 Topic change: '{topic}' (from '{clean_body[:60]}')")
         else:
             final_response = response
         
+        print(f"📤 Sending response: {final_response[:120]}{'...' if len(final_response) > 120 else ''}")
         html_response = markdown.markdown(final_response, extensions=['tables', 'fenced_code', 'nl2br'])
         await bot.client.room_send(
             room.room_id, "m.room.message",

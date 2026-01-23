@@ -32,6 +32,7 @@ class AgentState(TypedDict):
 
 async def reason_node(state: AgentState):
     """The Brain: Decides what to do."""
+    print(f"🧠 Reasoning on message: {state['messages'][-1].content[:100]}")
     bot_name = state.get("bot_name", "Assistant") 
     messages = [SystemMessage(content=generate_system_prompt(bot_name))] + state['messages']
     
@@ -157,7 +158,6 @@ app = workflow.compile()
 import ast
 
 def safe_execute_tool(action_str: str, available_tools: dict):
-    print(f"    [PARSE] Attempting to parse: {action_str}")
     try:
         # If the LLM includes noise, ast.parse will throw a SyntaxError here
         # which we return as a result so the LLM knows it messed up.
@@ -181,17 +181,23 @@ def safe_execute_tool(action_str: str, available_tools: dict):
             if isinstance(kw.value, ast.Constant): kwargs[kw.arg] = kw.value.value
             else: return f"Error: Keyword {kw.arg} is not a literal."
 
-        print(f"    [EXEC] Running {func_name} with args: {args} kwargs: {kwargs}")
+        print(f"🔧 Executing tool: {func_name}({', '.join(repr(a) for a in args)}{', ' + ', '.join(f'{k}={repr(v)}' for k, v in kwargs.items()) if kwargs else ''})")
         
         # ACTUALLY CALLING THE TOOL
         result = available_tools[func_name](*args, **kwargs)
         
-        print(f"    [RESULT] {func_name} execution complete.")
+        print(f"✅ Tool {func_name} completed")
+        if result is not None:
+            result_str = str(result)
+            print(f"   ↳ {result_str[:200]}{'...' if len(result_str) > 200 else ''}")
         return result
 
     except SyntaxError:
         print(f"    [ERROR] Syntax error in action string.")
+        print(f"❌ Syntax error in tool call: {action_str[:100]}")
         return f"Error: Syntax error in '{action_str}'. Ensure you only output the function call."
     except Exception as e:
         print(f"    [ERROR] Tool execution failed: {str(e)}")
+        print(f"    [ERROR] Tool execution failed: {str(e)}")
+        print(f"❌ Tool {func_name} failed: {str(e)[:200]}")
         return f"Tool Execution Error: {str(e)}"
