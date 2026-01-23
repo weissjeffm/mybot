@@ -48,10 +48,13 @@ async def process_message(bot, room, event):
     relates_to = content.get('m.relates_to', {})
     thread_root_id = relates_to.get('event_id') if relates_to.get('rel_type') == 'm.thread' else event.event_id
 
-    await run_agent_turn(bot, room, thread_root_id, sender_name, clean_body)
+    await run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, event.event_id)
 
-async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body):
+async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, event_id):
     ui_state = {"log_event_id": None, "thoughts": [], "active_tools": {}}
+    
+    # Send typing indicator immediately when processing starts
+    await bot.client.room_typing(room.room_id, True, timeout=5000)
     
     async def log_callback(text, node=None, data=None):
         async with bot.ui_lock:
@@ -96,11 +99,40 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body):
         
         response = await asyncio.wait_for(run_agent_logic(initial_state), timeout=600)
         
-        html_response = markdown.markdown(response, extensions=['tables', 'fenced_code', 'nl2br'])
+        # === TOPIC CHANGE: Start a new thread ===
+        new_thread_root_id = None
+        if isinstance(response, dict) and response.get("event") == "TOPIC_CHANGE":
+            topic = response.get("topic")
+            final_response = response.get("message", "")
+
+            # Use the CURRENT USER MESSAGE as the new thread root
+            # This ensures the actual pivot point is preserved
+            new_content = {
+                "msgtype": "m.text",
+                "body": f"[Thread migrated to: {topic}]\n\n> {clean_body}\n\n(Continued from thread: {thread_root_id})",
+                "format": "org.matrix.custom.html",
+                "formatted_body": f"[Thread migrated to: {topic}]<br><blockquote>{clean_body}</blockquote>(Continued from thread: <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}'>link</a>)"
+            }
+
+            # Send the new root message (not in a thread — this becomes the new root)
+            root_resp = await bot.client.room_send(
+                room.room_id,
+                "m.room.message",
+                content=new_content,
+                ignore_unverified_devices=True
+            )
+            new_thread_root_id = root_resp.event_id
+
+            # Update thread_root_id for the bot's reply
+            thread_root_id = new_thread_root_id
+        else:
+            final_response = response
+        
+        html_response = markdown.markdown(final_response, extensions=['tables', 'fenced_code', 'nl2br'])
         await bot.client.room_send(
             room.room_id, "m.room.message",
             content={
-                "msgtype": "m.text", "body": response, "format": "org.matrix.custom.html", 
+                "msgtype": "m.text", "body": final_response, "format": "org.matrix.custom.html", 
                 "formatted_body": html_response,
                 "m.relates_to": {"rel_type": "m.thread", "event_id": thread_root_id}
             }, ignore_unverified_devices=True

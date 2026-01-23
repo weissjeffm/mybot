@@ -56,6 +56,7 @@ class AgentState(TypedDict):
     current_thought: str
     log_callback: any # Added to state so nodes can signal UI updates
     bot_name: str
+    final_signal: dict  # Optional: signal from tools
     
 async def act_node(state: AgentState):
     """The Hands: Parallel Execution with non-blocking UI updates."""
@@ -87,6 +88,17 @@ async def act_node(state: AgentState):
 
     # 5. Build ToolMessages for the next reasoning step
     new_messages = [ToolMessage(content=str(r), tool_call_id=f"call_{uuid.uuid4().hex[:8]}") for r in results]
+    
+    # Check if any result is a TOPIC_CHANGE signal
+    for r in results:
+        if isinstance(r, dict) and r.get("event") == "TOPIC_CHANGE":
+            # Return signal as final response
+            return {
+                "messages": new_messages,
+                "current_thought": "",
+                "final_signal": r  # Add new field to state
+            }
+
     return {"messages": new_messages, "current_thought": "Tools complete."}
 
 async def run_agent_logic(initial_state: AgentState):
@@ -104,6 +116,10 @@ async def run_agent_logic(initial_state: AgentState):
                     await initial_state["log_callback"]("Formulating plan...", node="reason")
                 else:
                     final_response = thought
+            elif node_name == "act" and "final_signal" in state_update:
+                # Propagate the signal
+                return state_update["final_signal"]
+
     return final_response
 
 def should_continue(state: AgentState):
