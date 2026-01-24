@@ -1,12 +1,14 @@
 import operator
 import json
 import uuid
+import time
 from typing import Annotated, TypedDict, Union, List
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import ToolMessage, SystemMessage, HumanMessage, BaseMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from tools import get_tools_dict, generate_system_prompt
 import subprocess
+import asyncio
 
 # --- 1. CONFIGURATION ---
 llm = ChatOpenAI(
@@ -31,16 +33,24 @@ class AgentState(TypedDict):
 # --- 5. THE NODES ---
 
 async def reason_node(state: AgentState):
-    """The Brain: Decides what to do."""
-    print(f"🧠 Reasoning on message: {state['messages'][-1].content[:100]}")
+    """The Brain: Decides what to do. Times the LLM call."""
+    print(f"🧠 Reasoning on message ({sum(len(str(m.content)) for m in state['messages']):,} chars): {state['messages'][-1].content[:100]}")
     bot_name = state.get("bot_name", "Assistant") 
     messages = [SystemMessage(content=generate_system_prompt(bot_name))] + state['messages']
     
-    # Call Qwen
+    # Time the LLM call
+    start_time = time.time()
     response = await llm.ainvoke(messages)
+    end_time = time.time()
+    llm_time = end_time - start_time
+    
+    # Log via callback
+    log_callback = state['log_callback']
+    asyncio.create_task(log_callback(f"LLM 'reason' call took {llm_time:.2f}s", node="reason", data={"duration": llm_time}))
+    
     content = response.content
     if content.strip().startswith("Action:"):
-        asyncio.create_task(state['log_callback']("Formulating plan...", node="reason"))
+        asyncio.create_task(log_callback("Formulating plan...", node="reason"))
         
     return {"messages": [response], "current_thought": content}
 
@@ -74,9 +84,22 @@ async def act_node(state: AgentState):
     # create_task ensures we don't wait for Matrix to respond before starting tools
     asyncio.create_task(log_callback(text="Starting tools...", node="act_start", data={"actions": action_strings}))
 
-    # 3. Parallel Tool Execution (The priority!)
+    # 3. Parallel Tool Execution (The priority!) with timing
     loop = asyncio.get_event_loop()
-    tasks = [loop.run_in_executor(None, safe_execute_tool, act, TOOLS) for act in action_strings]
+    tasks = []
+    for act in action_strings:
+        # Wrap each tool call with timing
+        async def timed_tool_call(action):
+            start_time = time.time()
+            result = await loop.run_in_executor(None, safe_execute_tool, action, TOOLS)
+            end_time = time.time()
+            tool_time = end_time - start_time
+            # Non-blocking log with timing
+            asyncio.create_task(log_callback(f"Tool '{action.split('(')[0]}' took {tool_time:.2f}s", node="act_tool", data={"action": action, "duration": tool_time}))
+            return result
+
+        tasks.append(timed_tool_call(act))
+
     results = await asyncio.gather(*tasks)
 
     # 4. SIGNAL UI: Non-blocking "Finish" signal
