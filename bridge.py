@@ -3,14 +3,14 @@ import os
 import json
 import traceback
 import aiohttp
-from nio import AsyncClient, RoomMessageText, RoomMessageAudio, RoomEncryptedAudio, InviteMemberEvent, MegolmEvent, ToDeviceEvent, Event
+from nio import AsyncClient, RoomMessageText, RoomMessageAudio, RoomEncryptedAudio, InviteMemberEvent, MegolmEvent, ToDeviceEvent, Event, LoginError
 from callbacks import process_message
 
 class MatrixBot:
     def __init__(self):
 # 1. Identity & Credentials Logic
-        self.matrix_url = os.getenv("MATRIX_URL", "https://matrix.org")
-        self.matrix_user = os.getenv("MATRIX_USER", "@weissbot:matrix.org")
+        self.matrix_url = os.getenv("MATRIX_URL", "https://dumaweiss.com")
+        self.matrix_user = os.getenv("MATRIX_USER", "@anton:dumaweiss.com")
         self.matrix_pass = os.getenv("MATRIX_PASS", "password")
         self._display_name_cache = None
         # Derive short_name: @weissbot:matrix.org -> weissbot
@@ -70,8 +70,21 @@ class MatrixBot:
             await self.client.sync(timeout=30000, full_state=True)
         else:
             resp = await self.client.login(os.getenv("MATRIX_PASS", "password"))
-            with open(creds_file, "w") as f:
-                json.dump({"access_token": resp.access_token, "user_id": resp.user_id, "device_id": resp.device_id}, f)
+            if isinstance(resp, LoginError):
+                print(f"❌ Login failed: {resp.message}")
+                raise RuntimeError("Failed to log in to Matrix. Check credentials and server availability.")
+            else:
+                print(f"✅ Logged in as {resp.user_id}")
+                with open(creds_file, "w") as f:
+                    json.dump({
+                        "access_token": resp.access_token,
+                        "user_id": resp.user_id,
+                        "device_id": resp.device_id
+                    }, f)
+                # Also assign to client immediately
+                self.client.access_token = resp.access_token
+                self.client.user_id = resp.user_id
+                self.client.device_id = resp.device_id
 
         try: await self.client.keys_upload()
         except: pass
