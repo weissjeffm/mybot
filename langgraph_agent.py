@@ -114,21 +114,29 @@ async def act_node(state: AgentState):
     new_messages = [ToolMessage(content=str(r), tool_call_id=f"call_{uuid.uuid4().hex[:8]}") for r in results]
     
     # Check if any result is a TOPIC_CHANGE signal
+    topic_change_signal = None
     for r in results:
         if isinstance(r, dict) and r.get("event") == "TOPIC_CHANGE":
-            # Return signal as final response
-            return {
-                "messages": new_messages,
-                "current_thought": "",
-                "final_signal": r  # Add new field to state
-            }
+            topic_change_signal = r
+            break
+
+    # If topic change, add signal to state but DO NOT RETURN EARLY
+    if topic_change_signal:
+        # We'll rely on log_callback to create the new thread
+        # And stash the signal for later use
+        log_callback = state['log_callback']
+        asyncio.create_task(log_callback(
+            text="TOPIC_CHANGE_SIGNAL",
+            node="act",
+            data={"signal": topic_change_signal, "messages": new_messages}
+        ))
 
     return {"messages": new_messages, "current_thought": "Tools complete."}
 
 async def run_agent_logic(initial_state: AgentState):
-    # Pass log_callback into the initial state
-    
+    """Run the agent and return both final response and any topic change signals."""
     final_response = ""
+    topic_change_signal = None
     config = {"recursion_limit": 100}
     
     async for event in app.astream(initial_state, config=config):
@@ -136,15 +144,22 @@ async def run_agent_logic(initial_state: AgentState):
             if node_name == "reason":
                 thought = state_update['current_thought']
                 if "Action:" in thought:
-                    # Optional: Log that the brain is thinking
                     await initial_state["log_callback"]("Formulating plan...", node="reason")
                 else:
                     final_response = thought
-            elif node_name == "act" and "final_signal" in state_update:
-                # Propagate the signal
-                return state_update["final_signal"]
+            elif node_name == "act":
+                # Check for topic change in tool results
+                if "messages" in state_update:
+                    for msg in state_update["messages"]:
+                        if (isinstance(msg, ToolMessage) and 
+                            isinstance(msg.content, dict) and 
+                            msg.content.get("event") == "TOPIC_CHANGE"):
+                            topic_change_signal = msg.content
 
-    return final_response
+    return {
+        "response": final_response,
+        "topic_change": topic_change_signal
+    }
 
 def should_continue(state: AgentState):
     """

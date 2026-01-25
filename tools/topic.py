@@ -17,6 +17,6 @@ def signal_topic_change(subject: str):
     return {
         "status": "ok",
         "event": "TOPIC_CHANGE",
-        "topic": subject,
-        "message": f"Topic changed to: {subject}"
+        "topic": subject
+        # Remove 'message' - let the AI generate the reply naturally
     }

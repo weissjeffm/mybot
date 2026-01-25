@@ -67,7 +67,38 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
                     ui_state["active_tools"][item["action"]] = "✅" if item["status"] == "ok" else "❌"
             elif node == "reason":
                 ui_state["thoughts"].append(text)
+            elif node == "act" and text == "TOPIC_CHANGE_SIGNAL":
+                # Extract topic change signal
+                signal = data.get("signal", {})
+                topic = signal.get("topic")
+                if not topic: return
 
+                print(f"🔄 Topic change signaled: '{topic}'")
+
+                # Create new thread root
+                new_content = {
+                    "msgtype": "m.text",
+                    "body": f"[Thread migrated to: {topic}]\n\n> {clean_body}\n\n(Continued from thread: {thread_root_id})",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body": f"[Thread migrated to: {topic}]<br><blockquote>{clean_body}</blockquote>(Continued from thread: <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}'>link</a>)"
+                }
+
+                root_resp = await bot.client.room_send(
+                    room.room_id,
+                    "m.room.message",
+                    content=new_content,
+                    ignore_unverified_devices=True
+                )
+                new_thread_root_id = root_resp.event_id
+
+                # Stash in ui_state
+                ui_state["new_thread_root_id"] = new_thread_root_id
+                ui_state["topic_change_applied"] = True
+
+                # Store the new thread ID in ui_state to be used later
+                ui_state["thread_root_id"] = new_thread_root_id
+
+            # Update typing and UI
             try: await bot.client.room_typing(room.room_id, True, timeout=30000)
             except: pass
 
@@ -98,16 +129,16 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             "log_callback": log_callback
         }
         
-        response = await asyncio.wait_for(run_agent_logic(initial_state), timeout=600)
-        
-        # === TOPIC CHANGE: Start a new thread ===
-        new_thread_root_id = None
-        if isinstance(response, dict) and response.get("event") == "TOPIC_CHANGE":
-            topic = response.get("topic")
-            final_response = response.get("message", "")
+        result = await asyncio.wait_for(run_agent_logic(initial_state), timeout=600)
+        final_response = result["response"]
+        topic_change = result["topic_change"]
 
-            # Use the CURRENT USER MESSAGE as the new thread root
-            # This ensures the actual pivot point is preserved
+        final_thread_id = thread_root_id  # Default to current thread
+
+        if topic_change:
+            topic = topic_change["topic"]
+            print(f"🔄 Topic change: '{topic}'")
+
             new_content = {
                 "msgtype": "m.text",
                 "body": f"[Thread migrated to: {topic}]\n\n> {clean_body}\n\n(Continued from thread: {thread_root_id})",
@@ -115,29 +146,24 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
                 "formatted_body": f"[Thread migrated to: {topic}]<br><blockquote>{clean_body}</blockquote>(Continued from thread: <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}'>link</a>)"
             }
 
-            # Send the new root message (not in a thread — this becomes the new root)
             root_resp = await bot.client.room_send(
                 room.room_id,
                 "m.room.message",
                 content=new_content,
                 ignore_unverified_devices=True
             )
-            new_thread_root_id = root_resp.event_id
+            final_thread_id = root_resp.event_id
 
-            # Update thread_root_id for the bot's reply
-            thread_root_id = new_thread_root_id
-            print(f"🔄 Topic change: '{topic}' (from '{clean_body[:60]}')")
-        else:
-            final_response = response
-        
+        # Send final reply into correct thread
         print(f"📤 Sending response: {final_response[:120]}{'...' if len(final_response) > 120 else ''}")
+        print(f"🎯 Final message will be sent in thread: {final_thread_id}")
         html_response = markdown.markdown(final_response, extensions=['tables', 'fenced_code', 'nl2br'])
         await bot.client.room_send(
             room.room_id, "m.room.message",
             content={
                 "msgtype": "m.text", "body": final_response, "format": "org.matrix.custom.html", 
                 "formatted_body": html_response,
-                "m.relates_to": {"rel_type": "m.thread", "event_id": thread_root_id}
+                "m.relates_to": {"rel_type": "m.thread", "event_id": final_thread_id}
             }, ignore_unverified_devices=True
         )
     except Exception:
