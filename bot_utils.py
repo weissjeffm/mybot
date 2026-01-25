@@ -1,5 +1,5 @@
 from io import BytesIO
-from nio import RoomMessageText
+from nio import RoomMessageText, UploadResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 async def get_display_name(bot, user_id):
@@ -46,12 +46,18 @@ async def send_audio_message(bot, room_id: str, audio_bytes: bytes, filename: st
     """Upload and send audio as a Matrix m.audio event."""
     try:
         # Upload audio file
-        response = await bot.client.upload(
-            io=BytesIO(audio_bytes),
+        result, maybe_keys = await bot.client.upload(
+            lambda retry_count, timeout_count: audio_bytes,
             content_type="audio/wav",
-            filename=filename
+            filename=filename,
+            filesize=len(audio_bytes)
         )
-        mxc_uri = response.content_uri
+
+        if not isinstance(result, UploadResponse):
+            print(f"❌ Upload failed: {result}")
+            return
+
+        mxc_uri = result.content_uri
 
         # Estimate duration (simplified; use pydub for accuracy)
         duration_ms = int(len(audio_bytes) / 2 * 8 / 16000 * 1000)  # rough estimate for 16kHz mono
@@ -66,8 +72,7 @@ async def send_audio_message(bot, room_id: str, audio_bytes: bytes, filename: st
                 "size": len(audio_bytes),
                 "duration": duration_ms,
                 "waveform": [0, 10, 20, 30, 20, 10, 0] * 10  # minimal placeholder
-            },
-            "file": {"url": mxc_uri, "content_type": "audio/wav", "filename": filename}
+            }
         }
 
         await bot.client.room_send(room_id, "m.room.message", content=content, ignore_unverified_devices=True)
