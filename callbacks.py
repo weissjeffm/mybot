@@ -115,30 +115,6 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             topic = topic_change["topic"]
             print(f"🔄 Topic change: '{topic}'")
 
-            # 1. Send a notification in the OLD THREAD (reply to old thread)
-            old_thread_notification = {
-                "msgtype": "m.text",
-                "body": f"🔄 Topic changed to: '{topic}'\n\n"
-                        f"Continuing discussion in a fresh thread: "
-                        f"https://matrix.to/#/{room.room_id}/{thread_root_id}?via=dumaweiss.com",
-                "format": "org.matrix.custom.html",
-                "formatted_body": f"🔄 Topic changed to: '<b>{topic}</b>'<br>"
-                                 f"Continuing discussion in a <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}?via=dumaweiss.com'>fresh thread</a>."
-            }
-
-            await bot.client.room_send(
-                room.room_id,
-                "m.room.message",
-                content={
-                    **old_thread_notification,
-                    "m.relates_to": {
-                        "rel_type": "m.thread",
-                        "event_id": thread_root_id
-                    }
-                },
-                ignore_unverified_devices=True
-            )
-
             # 2. Create a NEW TOP-LEVEL MESSAGE as the new thread root
             new_root_content = {
                 "msgtype": "m.text",
@@ -154,10 +130,36 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             new_root_resp = await bot.client.room_send(
                 room.room_id,
                 "m.room.message",
-                content=new_root_content,  # No m.relates_to → becomes top-level
+                content=new_root_content,
                 ignore_unverified_devices=True
             )
-            final_thread_id = new_root_resp.event_id
+            new_root_event_id = new_root_resp.event_id  # Capture new thread ID
+
+            # 1. Send a notification in the OLD THREAD (reply to old thread)
+            old_thread_notification = {
+                "msgtype": "m.text",
+                "body": f"🔄 Topic changed to: '{topic}'\n\n"
+                        f"Continuing discussion in a fresh thread: "
+                        f"https://matrix.to/#/{room.room_id}/{new_root_event_id}?via=dumaweiss.com",
+                "format": "org.matrix.custom.html",
+                "formatted_body": f"🔄 Topic changed to: '<b>{topic}</b>'<br>"
+                                 f"Continuing discussion in a <a href='https://matrix.to/#/{room.room_id}/{new_root_event_id}?via=dumaweiss.com'>fresh thread</a>."
+            }
+
+            await bot.client.room_send(
+                room.room_id,
+                "m.room.message",
+                content={
+                    **old_thread_notification,
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": thread_root_id
+                    }
+                },
+                ignore_unverified_devices=True
+            )
+
+            final_thread_id = new_root_event_id
 
             # Pause briefly before sending reply into new thread
             await asyncio.sleep(0.15)
