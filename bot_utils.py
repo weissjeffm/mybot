@@ -2,6 +2,41 @@ from io import BytesIO
 from nio import RoomMessageText, UploadResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
+def should_send_audio(response_text: str) -> bool:
+    """
+    Determine if an audio version should be sent based on response length.
+    Returns True for responses over 100 characters.
+    """
+    return len(response_text.strip()) > 100
+
+async def summarize_for_audio(response_text: str, llm) -> str:
+    """
+    Create a concise summary of the response for audio playback.
+    Targets 2-3 sentences that capture the key points.
+    """
+    if len(response_text) <= 100:
+        return response_text
+        
+    summary_prompt = f"""Create a concise spoken summary of the following message in no more than 200 words. If the response is already short and suitable for speech, leave it unchanged. When summarizing, stay in first person (you're summarizing your own message), focus on the key and actionable information. Omit headings, code blocks, tables, and markdown formatting. Make it sound natural when spoken aloud.
+
+Example:
+Response: "The server temperatures are within normal limits: CPU normal, GPU normal, Inlet normal. No cooling issues detected."
+Spoken summary: The server temperatures are normal.
+
+Do NOT include phrases like: "The message states that", or "the message goes on to say", that's not first person.
+Original response:
+{response_text}
+
+Concise spoken summary:"""
+    
+    try:
+        response = await llm.ainvoke([{"role": "user", "content": summary_prompt}])
+        return response.content.strip()
+    except Exception as e:
+        print(f"⚠️ Failed to generate audio summary: {e}")
+        # Return first 200 chars if summarization fails
+        return response_text[:200] + "..." if len(response_text) > 200 else response_text
+
 async def get_display_name(bot, user_id):
     """Resolves User ID to Name with caching."""
     if user_id in bot.user_cache:

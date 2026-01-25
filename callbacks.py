@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage
 from langgraph_agent import run_agent_logic 
 from media_utils import extract_audio_bytes, transcribe_audio, text_to_speech
 from auth_utils import handle_verification_request
-from bot_utils import get_display_name, get_structured_history, send_audio_message
+from bot_utils import get_display_name, get_structured_history, send_audio_message, should_send_audio, summarize_for_audio
 
 async def process_message(bot, room, event):
     if event.sender == bot.client.user_id: return
@@ -178,11 +178,18 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             }, ignore_unverified_devices=True
         )
 
-        # Send TTS audio version
+        # Conditionally send TTS audio version based on response length
         try:
-            print("🔊 Generating TTS audio response...")
-            audio_bytes = await text_to_speech(final_response)
-            await send_audio_message(bot, room.room_id, audio_bytes, "response.wav")
+            if should_send_audio(final_response):
+                print("🔊 Generating TTS audio response...")
+                # Create a concise summary for audio playback
+                from langgraph_agent import llm
+                audio_text = await summarize_for_audio(final_response, llm)
+                print(f"🔊 Audio summary: {audio_text[:120]}{'...' if len(audio_text) > 120 else ''}")
+                audio_bytes = await text_to_speech(audio_text)
+                await send_audio_message(bot, room.room_id, audio_bytes, "response.wav")
+            else:
+                print("🔇 Skipping audio generation for short response")
         except Exception as e:
             print(f"❌ TTS or audio send failed: {e}")
     except Exception:
