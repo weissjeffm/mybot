@@ -1,3 +1,4 @@
+from io import BytesIO
 from nio import RoomMessageText
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -40,3 +41,35 @@ async def get_structured_history(bot, room_id, thread_root_id, limit=30):
 
     messages.reverse() 
     return messages
+
+async def send_audio_message(bot, room_id: str, audio_bytes: bytes, filename: str = "response.wav"):
+    """Upload and send audio as a Matrix m.audio event."""
+    try:
+        # Upload audio file
+        response = await bot.client.upload(
+            io=BytesIO(audio_bytes),
+            content_type="audio/wav",
+            filename=filename
+        )
+        mxc_uri = response.content_uri
+
+        # Estimate duration (simplified; use pydub for accuracy)
+        duration_ms = int(len(audio_bytes) / 2 * 8 / 16000 * 1000)  # rough estimate for 16kHz mono
+
+        # Send audio message
+        content = {
+            "body": filename,
+            "msgtype": "m.audio",
+            "url": mxc_uri,
+            "info": {
+                "mimetype": "audio/wav",
+                "size": len(audio_bytes),
+                "duration": duration_ms,
+                "waveform": [0, 10, 20, 30, 20, 10, 0] * 10  # minimal placeholder
+            },
+            "file": {"url": mxc_uri, "content_type": "audio/wav", "filename": filename}
+        }
+
+        await bot.client.room_send(room_id, "m.room.message", content=content, ignore_unverified_devices=True)
+    except Exception as e:
+        print(f"❌ Failed to send audio message: {e}")
