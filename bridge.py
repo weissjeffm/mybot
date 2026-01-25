@@ -9,7 +9,7 @@ from callbacks import process_message
 class MatrixBot:
     def __init__(self):
 # 1. Identity & Credentials Logic
-        self.matrix_url = os.getenv("MATRIX_URL", "https://dumaweiss.com")
+        self.matrix_url = os.getenv("MATRIX_URL", "https://matrix.dumaweiss.com")
         self.matrix_user = os.getenv("MATRIX_USER", "@anton:dumaweiss.com")
         self.matrix_pass = os.getenv("MATRIX_PASS", "password")
         self._display_name_cache = None
