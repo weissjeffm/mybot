@@ -120,16 +120,13 @@ async def act_node(state: AgentState):
             topic_change_signal = r
             break
 
-    # If topic change, add signal to state but DO NOT RETURN EARLY
+    # If topic change, store it in state so run_agent_logic can return it
     if topic_change_signal:
-        # We'll rely on log_callback to create the new thread
-        # And stash the signal for later use
-        log_callback = state['log_callback']
-        asyncio.create_task(log_callback(
-            text="TOPIC_CHANGE_SIGNAL",
-            node="act",
-            data={"signal": topic_change_signal, "messages": new_messages}
-        ))
+        return {
+            "messages": new_messages,
+            "current_thought": "Tools complete.",
+            "final_signal": topic_change_signal
+        }
 
     return {"messages": new_messages, "current_thought": "Tools complete."}
 
@@ -148,13 +145,11 @@ async def run_agent_logic(initial_state: AgentState):
                 else:
                     final_response = thought
             elif node_name == "act":
-                # Check for topic change in tool results
-                if "messages" in state_update:
-                    for msg in state_update["messages"]:
-                        if (isinstance(msg, ToolMessage) and 
-                            isinstance(msg.content, dict) and 
-                            msg.content.get("event") == "TOPIC_CHANGE"):
-                            topic_change_signal = msg.content
+                # Check for final_signal in state update
+                if "final_signal" in state_update:
+                    signal = state_update["final_signal"]
+                    if isinstance(signal, dict) and signal.get("event") == "TOPIC_CHANGE":
+                        topic_change_signal = signal
 
     return {
         "response": final_response,

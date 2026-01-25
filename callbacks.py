@@ -67,36 +67,6 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
                     ui_state["active_tools"][item["action"]] = "✅" if item["status"] == "ok" else "❌"
             elif node == "reason":
                 ui_state["thoughts"].append(text)
-            elif node == "act" and text == "TOPIC_CHANGE_SIGNAL":
-                # Extract topic change signal
-                signal = data.get("signal", {})
-                topic = signal.get("topic")
-                if not topic: return
-
-                print(f"🔄 Topic change signaled: '{topic}'")
-
-                # Create new thread root
-                new_content = {
-                    "msgtype": "m.text",
-                    "body": f"[Thread migrated to: {topic}]\n\n> {clean_body}\n\n(Continued from thread: {thread_root_id})",
-                    "format": "org.matrix.custom.html",
-                    "formatted_body": f"[Thread migrated to: {topic}]<br><blockquote>{clean_body}</blockquote>(Continued from thread: <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}'>link</a>)"
-                }
-
-                root_resp = await bot.client.room_send(
-                    room.room_id,
-                    "m.room.message",
-                    content=new_content,
-                    ignore_unverified_devices=True
-                )
-                new_thread_root_id = root_resp.event_id
-
-                # Stash in ui_state
-                ui_state["new_thread_root_id"] = new_thread_root_id
-                ui_state["topic_change_applied"] = True
-
-                # Store the new thread ID in ui_state to be used later
-                ui_state["thread_root_id"] = new_thread_root_id
 
             # Update typing and UI
             try: await bot.client.room_typing(room.room_id, True, timeout=30000)
@@ -120,7 +90,13 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             if not ui_state["log_event_id"]: ui_state["log_event_id"] = resp.event_id
 
     try:
-        history = await get_structured_history(bot, room.room_id, thread_root_id)
+        # Get history and filter out any thread migration messages
+        raw_history = await get_structured_history(bot, room.room_id, thread_root_id)
+        # Filter out messages that are thread migration metadata
+        history = [
+            msg for msg in raw_history 
+            if not (isinstance(msg.content, str) and msg.content.strip().startswith("[Thread migrated to:"))
+        ]
         history.append(HumanMessage(content=f"{sender_name}: {clean_body}"))
 
         initial_state = {
@@ -139,20 +115,52 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             topic = topic_change["topic"]
             print(f"🔄 Topic change: '{topic}'")
 
-            new_content = {
+            # 1. Send a notification in the OLD THREAD (reply to old thread)
+            old_thread_notification = {
                 "msgtype": "m.text",
-                "body": f"[Thread migrated to: {topic}]\n\n> {clean_body}\n\n(Continued from thread: {thread_root_id})",
+                "body": f"🔄 Topic changed to: '{topic}'\n\n"
+                        f"Continuing discussion in a fresh thread: "
+                        f"https://matrix.to/#/{room.room_id}/{thread_root_id}?via=dumaweiss.com",
                 "format": "org.matrix.custom.html",
-                "formatted_body": f"[Thread migrated to: {topic}]<br><blockquote>{clean_body}</blockquote>(Continued from thread: <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}'>link</a>)"
+                "formatted_body": f"🔄 Topic changed to: '<b>{topic}</b>'<br>"
+                                 f"Continuing discussion in a <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}?via=dumaweiss.com'>fresh thread</a>."
             }
 
-            root_resp = await bot.client.room_send(
+            await bot.client.room_send(
                 room.room_id,
                 "m.room.message",
-                content=new_content,
+                content={
+                    **old_thread_notification,
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": thread_root_id
+                    }
+                },
                 ignore_unverified_devices=True
             )
-            final_thread_id = root_resp.event_id
+
+            # 2. Create a NEW TOP-LEVEL MESSAGE as the new thread root
+            new_root_content = {
+                "msgtype": "m.text",
+                "body": f"[New Topic: {topic}]\n\n"
+                        f"> {clean_body}\n\n"
+                        f"(Started from <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}?via=dumaweiss.com'>previous discussion</a>)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": f"<i>[New Topic: {topic}]</i><br>"
+                                 f"<blockquote>{clean_body}</blockquote>"
+                                 f"(Started from <a href='https://matrix.to/#/{room.room_id}/{thread_root_id}?via=dumaweiss.com'>previous discussion</a>)"
+            }
+
+            new_root_resp = await bot.client.room_send(
+                room.room_id,
+                "m.room.message",
+                content=new_root_content,  # No m.relates_to → becomes top-level
+                ignore_unverified_devices=True
+            )
+            final_thread_id = new_root_resp.event_id
+
+            # Pause briefly before sending reply into new thread
+            await asyncio.sleep(0.15)
 
         # Send final reply into correct thread
         print(f"📤 Sending response: {final_response[:120]}{'...' if len(final_response) > 120 else ''}")
