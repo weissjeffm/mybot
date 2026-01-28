@@ -77,39 +77,90 @@ async def get_structured_history(bot, room_id, thread_root_id, limit=30):
     messages.reverse() 
     return messages
 
-async def send_audio_message(bot, room_id: str, audio_bytes: bytes, filename: str = "response.wav"):
-    """Upload and send audio as a Matrix m.audio event."""
-    try:
-        # Upload audio file
-        result, maybe_keys = await bot.client.upload(
-            lambda retry_count, timeout_count: audio_bytes,
-            content_type="audio/wav",
-            filename=filename,
-            filesize=len(audio_bytes)
-        )
+from nio import UploadResponse
 
-        if not isinstance(result, UploadResponse):
-            print(f"❌ Upload failed: {result}")
+import subprocess
+import asyncio
+from nio import UploadResponse
+import wave
+
+async def send_audio_message(bot, room_id: str, audio_bytes: bytes, filename: str = "voice.ogg", thread_id: str = None):
+    """
+    Transcodes audio to Ogg Opus (Matrix standard) and sends it.
+    """
+    print(f"🎤 Received {len(audio_bytes)} bytes. Transcoding to Ogg Opus...")
+
+    try:
+        with wave.open(BytesIO(audio_bytes), 'rb') as w:
+            # frames / rate * 1000 = duration in ms
+            duration_ms = int((w.getnframes() / w.getframerate()) * 1000)
+    except Exception as e:
+        print(f"⚠️ Could not read WAV duration, using sane default: {e}")
+        duration_ms = 5000
+        
+    # 1. Transcode to Ogg Opus using FFmpeg
+    # We force the codec to 'libopus' to satisfy Element.
+    try:
+        process = await asyncio.create_subprocess_exec(
+            'ffmpeg', 
+            '-i', 'pipe:0',       # Read from stdin
+            '-c:a', 'libopus',    # FORCE Opus codec
+            '-b:a', '24k',        # 24k bitrate is plenty for voice
+            '-ar', '48000',       # Opus likes 48kHz sample rate
+            '-application', 'voip',# Optimization: Tells Opus to tune for voice, not music
+            '-ar', '48000',        # Sample Rate: 48kHz (Native Opus rate)
+            '-f', 'ogg',          # Ogg container
+            'pipe:1',             # Write to stdout
+            stdin=subprocess.PIPE, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE
+        )
+        
+        # Communicate sends the input bytes and reads the output
+        opus_bytes, stderr = await process.communicate(input=audio_bytes)
+        
+        if process.returncode != 0:
+            print(f"❌ Transcoding failed: {stderr.decode()}")
             return
 
-        mxc_uri = result.content_uri
+        print(f"✅ Transcoded! Size: {len(audio_bytes)} -> {len(opus_bytes)} bytes")
 
-        # Estimate duration (simplified; use pydub for accuracy)
-        duration_ms = int(len(audio_bytes) / 2 * 8 / 16000 * 1000)  # rough estimate for 16kHz mono
+    except FileNotFoundError:
+        print("❌ FFmpeg is not installed. Install it with: sudo dnf install ffmpeg")
+        return
 
-        # Send audio message
+    # 2. Upload the Opus bytes
+    try:
+        resp, maybe_keys = await bot.client.upload(
+            lambda retry, timeout: opus_bytes,
+            content_type="audio/ogg", 
+            filename=filename,
+            filesize=len(opus_bytes)
+        )
+
+        if not isinstance(resp, UploadResponse):
+            print(f"❌ Upload failed: {resp}")
+            return
+
+        # 3. Construct the Event
+        # Note: We rely on Element estimating duration from the file size/header now that it's valid Opus.
         content = {
             "body": filename,
             "msgtype": "m.audio",
-            "url": mxc_uri,
+            "url": resp.content_uri,
             "info": {
-                "mimetype": "audio/wav",
-                "size": len(audio_bytes),
-                "duration": duration_ms,
-                "waveform": [0, 10, 20, 30, 20, 10, 0] * 10  # minimal placeholder
-            }
+                "mimetype": "audio/ogg",
+                "size": len(opus_bytes),
+                "duration": duration_ms
+            },
+            "org.matrix.msc3245.voice": {}
         }
 
-        await bot.client.room_send(room_id, "m.room.message", content=content, ignore_unverified_devices=True)
+        if thread_id:
+            content["m.relates_to"] = {"rel_type": "m.thread", "event_id": thread_id}
+
+        await bot.client.room_send(room_id, "m.room.message", content=content)
+
     except Exception as e:
-        print(f"❌ Failed to send audio message: {e}")
+        print(f"❌ Failed to send audio: {e}")
+        

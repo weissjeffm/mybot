@@ -6,12 +6,12 @@ async def text_to_speech(text: str, api_key: str = "sk-50cf096cc7c795865e") -> b
     Convert text to speech using LocalAI TTS.
     Returns raw audio bytes (WAV format).
     """
-    tts_url = "http://localhost:8080/v1/audio/speech"
+    tts_url = "http://localhost:8080/tts"
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {
         "model": "tts-1",
         "input": text,
-        "voice": "en-US-Standard-D",
+        # "voice": "en-US-Standard-D",
         "response_format": "wav"
     }
 

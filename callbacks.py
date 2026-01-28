@@ -187,7 +187,7 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
                 audio_text = await summarize_for_audio(final_response, llm)
                 print(f"🔊 Audio summary: {audio_text[:120]}{'...' if len(audio_text) > 120 else ''}")
                 audio_bytes = await text_to_speech(audio_text)
-                await send_audio_message(bot, room.room_id, audio_bytes, "response.wav")
+                await send_audio_message(bot, room.room_id, audio_bytes, "response.ogg", thread_id=final_thread_id)
             else:
                 print("🔇 Skipping audio generation for short response")
         except Exception as e:
