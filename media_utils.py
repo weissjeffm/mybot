@@ -1,6 +1,27 @@
 import aiohttp
 from nio.crypto import decrypt_attachment
 
+async def text_to_speech(text: str, api_key: str = "sk-50cf096cc7c795865e") -> bytes:
+    """
+    Convert text to speech using LocalAI TTS.
+    Returns raw audio bytes (WAV format).
+    """
+    tts_url = "http://localhost:8080/tts"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = {
+        "model": "tts-1",
+        "input": text,
+        # "voice": "en-US-Standard-D",
+        "response_format": "wav"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(tts_url, json=payload, headers=headers) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise Exception(f"TTS request failed: {resp.status}, {text}")
+            return await resp.read()
+
 async def transcribe_audio(audio_bytes, filename, api_key):
     """Sends audio bytes to LocalAI with authentication."""
     stt_url = "http://localhost:8080/v1/audio/transcriptions"
