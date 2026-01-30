@@ -2,7 +2,7 @@ import asyncio
 import markdown
 import traceback
 from langchain_core.messages import HumanMessage
-from langgraph_agent import run_agent_logic 
+from langgraph_agent import run_agent_logic, set_llm_instance, llm as global_llm
 from media_utils import extract_audio_bytes, transcribe_audio, text_to_speech
 from auth_utils import handle_verification_request
 from bot_utils import get_display_name, get_structured_history, send_audio_message, should_send_audio, summarize_for_audio
@@ -21,7 +21,12 @@ async def process_message(bot, room, event):
         audio_bytes = await extract_audio_bytes(bot.client, event)
         if audio_bytes:
             await bot.client.room_typing(room.room_id, True)
-            transcript = await transcribe_audio(audio_bytes, "voice.ogg", "sk-50cf096cc7c795865e")
+            transcript = await transcribe_audio(
+                audio_bytes,
+                "voice.ogg",
+                base_url=bot.localai_base_url,
+                api_key=bot.localai_api_key
+            )
             if transcript:
                 print(f"📝 Transcript: {transcript}")
                 clean_body = f"[Transcription of voice message from {sender_name}]: {transcript}"
@@ -99,11 +104,17 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
         ]
         history.append(HumanMessage(content=f"{sender_name}: {clean_body}"))
 
+        # Ensure LLM is initialized
+        if global_llm is None:
+            set_llm_instance(bot.localai_base_url, bot.localai_api_key)
+            
         initial_state = {
             "messages": history,
             "bot_name": await bot.display_name or bot.short_name or "Assistant",
-            "log_callback": log_callback
+            "log_callback": log_callback,
+            "llm": global_llm
         }
+        
         
         result = await asyncio.wait_for(run_agent_logic(initial_state), timeout=600)
         final_response = result["response"]
@@ -183,10 +194,13 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             if should_send_audio(final_response):
                 print("🔊 Generating TTS audio response...")
                 # Create a concise summary for audio playback
-                from langgraph_agent import llm
-                audio_text = await summarize_for_audio(final_response, llm)
+                audio_text = await summarize_for_audio(final_response, global_llm)
                 print(f"🔊 Audio summary: {audio_text[:120]}{'...' if len(audio_text) > 120 else ''}")
-                audio_bytes = await text_to_speech(audio_text)
+                audio_bytes = await text_to_speech(
+                    audio_text,
+                    base_url=bot.localai_base_url,
+                    api_key=bot.localai_api_key
+                )
                 await send_audio_message(bot, room.room_id, audio_bytes, "response.ogg", thread_id=final_thread_id)
             else:
                 print("🔇 Skipping audio generation for short response")

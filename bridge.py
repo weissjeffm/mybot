@@ -3,16 +3,39 @@ import os
 import json
 import traceback
 import aiohttp
-from nio import AsyncClient, RoomMessageText, RoomMessageAudio, RoomEncryptedAudio, InviteMemberEvent, MegolmEvent, ToDeviceEvent, Event, LoginError
+from nio import AsyncClient, RoomMessageText, RoomMessageAudio, RoomEncryptedAudio, InviteMemberEvent, MegolmEvent, ToDeviceEvent, Event, LoginError, SyncResponse
 from callbacks import process_message
 
 class MatrixBot:
     def __init__(self):
-# 1. Identity & Credentials Logic
-        self.matrix_url = os.getenv("MATRIX_URL", "https://matrix.dumaweiss.com")
-        self.matrix_user = os.getenv("MATRIX_USER", "@anton:dumaweiss.com")
-        self.matrix_pass = os.getenv("MATRIX_PASS", "password")
+        # Load configuration from config.json
+        try:
+            with open('config.json', 'r') as f:
+                config = json.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError("config.json not found. Please create it from config.example.json")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in config.json: {e}")
+
+        # Validate required configuration fields
+        required_fields = ["matrix_url", "matrix_user", "matrix_pass", "localai_base_url", "localai_api_key"]
+        missing = [field for field in required_fields if not config.get(field)]
+        if missing:
+            raise ValueError(f"Missing required config fields: {', '.join(missing)}")
+
+        # 1. Identity & Credentials Logic
+        self.matrix_url = config.get("matrix_url")
+        self.matrix_user = config.get("matrix_user")
+        self.matrix_pass = config.get("matrix_pass")
+        
+        # 2. LocalAI Configuration
+        self.localai_base_url = config.get("localai_base_url")
+        self.localai_api_key = config.get("localai_api_key")
         self._display_name_cache = None
+        
+        # Initialize LLM in langgraph_agent
+        from langgraph_agent import set_llm_instance
+        set_llm_instance(self.localai_base_url, self.localai_api_key)
         # Derive short_name: @weissbot:matrix.org -> weissbot
         try:
             self._short_name = self.matrix_user.split(":")[0].lstrip("@")
@@ -113,7 +136,7 @@ class MatrixBot:
             try:
                 # We use full_state=True ONLY here, once.
                 first_sync = await self.client.sync(timeout=30000, full_state=True)
-                if isinstance(first_sync, SyncResponse):
+                if hasattr(first_sync, "next_batch"):
                     self.client.next_batch = first_sync.next_batch
                     with open("next_batch", "w") as f: f.write(first_sync.next_batch)
             except Exception as e:

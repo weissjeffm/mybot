@@ -1,0 +1,7 @@
+{
+  "matrix_url": "https://matrix.example.com",
+  "matrix_user": "@bot_user:example.com",
+  "matrix_pass": "your_bot_password",
+  "localai_base_url": "http://localhost:8080",
+  "localai_api_key": "your_localai_api_key"
+}

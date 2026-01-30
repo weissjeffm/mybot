@@ -1,12 +1,12 @@
 import aiohttp
 from nio.crypto import decrypt_attachment
 
-async def text_to_speech(text: str, api_key: str = "sk-50cf096cc7c795865e") -> bytes:
+async def text_to_speech(text: str, base_url: str, api_key: str) -> bytes:
     """
     Convert text to speech using LocalAI TTS.
     Returns raw audio bytes (WAV format).
     """
-    tts_url = "http://localhost:8080/tts"
+    tts_url = f"{base_url}/tts"
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {
         "model": "tts-1",
@@ -18,13 +18,19 @@ async def text_to_speech(text: str, api_key: str = "sk-50cf096cc7c795865e") -> b
     async with aiohttp.ClientSession() as session:
         async with session.post(tts_url, json=payload, headers=headers) as resp:
             if resp.status != 200:
-                text = await resp.text()
+                try:
+                    text = await resp.text()
+                except:
+                    text = "Unknown error"
                 raise Exception(f"TTS request failed: {resp.status}, {text}")
-            return await resp.read()
+            audio_data = await resp.read()
+            if len(audio_data) == 0:
+                raise Exception("TTS service returned empty audio data")
+            return audio_data
 
-async def transcribe_audio(audio_bytes, filename, api_key):
+async def transcribe_audio(audio_bytes, filename, base_url, api_key):
     """Sends audio bytes to LocalAI with authentication."""
-    stt_url = "http://localhost:8080/v1/audio/transcriptions"
+    stt_url = f"{base_url}/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {api_key}"}
     
     data = aiohttp.FormData()
@@ -36,8 +42,16 @@ async def transcribe_audio(audio_bytes, filename, api_key):
             async with session.post(stt_url, data=data, headers=headers) as resp:
                 if resp.status == 200:
                     json_resp = await resp.json()
-                    return json_resp.get("text", "")
-                return None
+                    text = json_resp.get("text", "").strip()
+                    if text:
+                        return text
+                    else:
+                        print("⚠️ Transcription returned empty result")
+                        return None
+                else:
+                    error_text = await resp.text()
+                    print(f"⚠️ Transcription failed with status {resp.status}: {error_text}")
+                    return None
     except Exception as e:
         print(f"⚠️ Transcription failure: {e}")
         return None

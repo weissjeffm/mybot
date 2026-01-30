@@ -2,45 +2,63 @@ import operator
 import json
 import uuid
 import time
-from typing import Annotated, TypedDict, Union, List
+from typing import Annotated, TypedDict, Union, List, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import ToolMessage, SystemMessage, HumanMessage, BaseMessage, AIMessage
+from langchain_core.language_models import BaseChatModel
 from langgraph.graph import StateGraph, END
 from tools import get_tools_dict, generate_system_prompt
 import subprocess
 import asyncio
 
-# --- 1. CONFIGURATION ---
-llm = ChatOpenAI(
-    base_url="http://localhost:8080/v1", # Your LocalAI URL
-    api_key="sk-50cf096cc7c795865e",
-    model="qwen3-235b-a22b-instruct-2507", # Match your LocalAI model name
-    temperature=0,
-    max_tokens=2048,
-    timeout=600,
-    max_retries=2
-)
-
-TOOLS = get_tools_dict() # Automatically loads ssh, ipmi, etc.
-
-# --- 3. THE STATE ---
 class AgentState(TypedDict):
-    # 'operator.add' means: when we return new messages, APPEND them to this list
     messages: Annotated[List[BaseMessage], operator.add]
     current_thought: str
-    log_callback: any
+    log_callback: Any
+    bot_name: str
+    final_signal: dict
+    llm: BaseChatModel
+
+# --- 1. CONFIGURATION ---
+# We'll create a factory function to initialize the LLM with dynamic config
+def create_llm(base_url, api_key):
+    return ChatOpenAI(
+        base_url=f"{base_url}/v1",
+        api_key=api_key,
+        model="qwen3-235b-a22b-instruct-2507",
+        temperature=0,
+        max_tokens=2048,
+        timeout=600,
+        max_retries=2
+    )
+
+# Initialize tools
+TOOLS = get_tools_dict() # Automatically loads ssh, ipmi, etc.
+
+# Global variable for the LLM instance, will be set by the bridge
+llm = None
+
+def set_llm_instance(base_url: str, api_key: str):
+    """Set the global LLM instance with provided configuration."""
+    global llm
+    llm = create_llm(base_url, api_key)
+    return llm
+
 
 # --- 5. THE NODES ---
 
 async def reason_node(state: AgentState):
     """The Brain: Decides what to do. Times the LLM call."""
-    print(f"🧠 Reasoning on message ({sum(len(str(m.content)) for m in state['messages']):,} chars): {state['messages'][-1].content[:100]}")
     bot_name = state.get("bot_name", "Assistant") 
     messages = [SystemMessage(content=generate_system_prompt(bot_name))] + state['messages']
     
+    llm_instance = state.get("llm")
+    if not llm_instance:
+        raise ValueError("LLM instance missing in state. Ensure set_llm_instance() was called and llm is passed in initial state.")
+    
     # Time the LLM call
     start_time = time.time()
-    response = await llm.ainvoke(messages)
+    response = await llm_instance.ainvoke(messages)
     end_time = time.time()
     llm_time = end_time - start_time
     
@@ -60,15 +78,6 @@ import re
 import uuid
 import json
 
-# langgraph_agent.py refinements
-
-class AgentState(TypedDict):
-    messages: Annotated[List[BaseMessage], operator.add]
-    current_thought: str
-    log_callback: any # Added to state so nodes can signal UI updates
-    bot_name: str
-    final_signal: dict  # Optional: signal from tools
-    
 async def act_node(state: AgentState):
     """The Hands: Parallel Execution with non-blocking UI updates."""
     last_message = state['messages'][-1].content
@@ -136,16 +145,27 @@ async def run_agent_logic(initial_state: AgentState):
     topic_change_signal = None
     config = {"recursion_limit": 100}
     
-    async for event in app.astream(initial_state, config=config):
+    # Create a clean state with required fields
+    state = {
+        "messages": initial_state["messages"],
+        "log_callback": initial_state["log_callback"],
+        "bot_name": initial_state.get("bot_name", "Assistant"),
+        "llm": initial_state.get("llm") or llm  # Use passed llm or global
+    }
+    
+    # Ensure llm is present
+    if not state["llm"]:
+        raise ValueError("LLM instance not set. Call set_llm_instance() first.")
+
+    async for event in app.astream(state, config=config):
         for node_name, state_update in event.items():
             if node_name == "reason":
                 thought = state_update['current_thought']
                 if "Action:" in thought:
-                    await initial_state["log_callback"]("Formulating plan...", node="reason")
+                    await state["log_callback"]("Formulating plan...", node="reason")
                 else:
                     final_response = thought
             elif node_name == "act":
-                # Check for final_signal in state update
                 if "final_signal" in state_update:
                     signal = state_update["final_signal"]
                     if isinstance(signal, dict) and signal.get("event") == "TOPIC_CHANGE":
@@ -187,6 +207,7 @@ workflow.add_conditional_edges(
 workflow.add_edge("act", "reason") # Loop back to Brain after Tool
 
 app = workflow.compile()
+
 
 import ast
 
