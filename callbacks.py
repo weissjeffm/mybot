@@ -2,7 +2,8 @@ import asyncio
 import markdown
 import traceback
 from langchain_core.messages import HumanMessage
-from langgraph_agent import run_agent_logic, set_llm_instance, llm as global_llm
+from langgraph_agent import run_agent_logic, set_llm_instance
+import langgraph_agent
 from media_utils import extract_audio_bytes, transcribe_audio, text_to_speech
 from auth_utils import handle_verification_request
 from bot_utils import get_display_name, get_structured_history, send_audio_message, should_send_audio, summarize_for_audio
@@ -112,17 +113,13 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             "messages": history,
             "bot_name": await bot.display_name or bot.short_name or "Assistant",
             "log_callback": log_callback,
-            "llm": global_llm
+            "llm": langgraph_agent.llm
         }
         
         
         result = await asyncio.wait_for(run_agent_logic(initial_state), timeout=600)
         final_response = result["response"]
         topic_change = result["topic_change"]
-
-        # Ensure LLM is initialized before summarizing for audio
-        if global_llm is None:
-            set_llm_instance(bot.localai_base_url, bot.localai_api_key)
 
         final_thread_id = thread_root_id  # Default to current thread
 
@@ -198,7 +195,9 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             if should_send_audio(final_response):
                 print("🔊 Generating TTS audio response...")
                 # Create a concise summary for audio playback
-                audio_text = await summarize_for_audio(final_response, global_llm)
+                if langgraph_agent.llm is None:
+                    set_llm_instance(bot.localai_base_url, bot.localai_api_key)
+                audio_text = await summarize_for_audio(final_response, langgraph_agent.llm)
                 print(f"🔊 Audio summary: {audio_text[:120]}{'...' if len(audio_text) > 120 else ''}")
                 audio_bytes = await text_to_speech(
                     audio_text,
