@@ -106,7 +106,7 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
         history.append(HumanMessage(content=f"{sender_name}: {clean_body}"))
 
         # Ensure LLM is initialized
-        if global_llm is None:
+        if langgraph_agent.llm is None:
             set_llm_instance(bot.localai_base_url, bot.localai_api_key)
             
         initial_state = {
