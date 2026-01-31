@@ -17,6 +17,9 @@ async def summarize_for_audio(response_text: str, llm) -> str:
     if len(response_text) <= 100:
         return response_text
         
+    if not llm:
+        return response_text[:200] + "..." if len(response_text) > 200 else response_text
+        
     summary_prompt = f"""Create a concise spoken summary of the following message in no more than 200 words. If the response is already short and suitable for speech, leave it unchanged. When summarizing, stay in first person (you're summarizing your own message), focus on the key and actionable information. Omit headings, code blocks, tables, and markdown formatting. Make it sound natural when spoken aloud.
 
 Example:

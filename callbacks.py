@@ -120,6 +120,10 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
         final_response = result["response"]
         topic_change = result["topic_change"]
 
+        # Ensure LLM is initialized before summarizing for audio
+        if global_llm is None:
+            set_llm_instance(bot.localai_base_url, bot.localai_api_key)
+
         final_thread_id = thread_root_id  # Default to current thread
 
         if topic_change:
