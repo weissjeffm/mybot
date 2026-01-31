@@ -83,41 +83,99 @@ async def act_node(state: AgentState):
     last_message = state['messages'][-1].content
     log_callback = state['log_callback']
     
-    # 1. Parse actions
-    action_strings = [line.strip()[7:].strip() for line in last_message.splitlines() if line.strip().startswith("Action:")]
+    # 1. Parse actions into structured data
+    actions = []
+    for line in last_message.splitlines():
+        if line.strip().startswith("Action:"):
+            action_str = line.strip()[7:].strip()
+            try:
+                # Parse the action string into structured data
+                tree = ast.parse(action_str.strip(), mode='eval')
+                if not isinstance(tree.body, ast.Call):
+                    raise ValueError("Action must be a pure function call")
+                
+                fn_name = tree.body.func.id
+                args = []
+                for arg in tree.body.args:
+                    if isinstance(arg, ast.Constant): 
+                        args.append(arg.value)
+                    else:
+                        raise ValueError(f"Argument {ast.dump(arg)} is not a literal")
+                
+                kwargs = {}
+                for kw in tree.body.keywords:
+                    if isinstance(kw.value, ast.Constant): 
+                        kwargs[kw.arg] = kw.value.value
+                    else:
+                        raise ValueError(f"Keyword {kw.arg} is not a literal")
+                
+                actions.append({
+                    "name": fn_name,
+                    "args": args,
+                    "kwargs": kwargs,
+                    "original": action_str
+                })
+            except Exception as e:
+                actions.append({
+                    "name": "error",
+                    "error": f"Parse error: {str(e)}",
+                    "original": action_str
+                })
 
-    if not action_strings:
+    if not actions:
         return {"messages": [ToolMessage(content="Error", tool_call_id="err")]}
 
-    # 2. SIGNAL UI: Non-blocking "Start" signal
-    # create_task ensures we don't wait for Matrix to respond before starting tools
-    asyncio.create_task(log_callback(text="Starting tools...", node="act_start", data={"actions": action_strings}))
+    # 2. SIGNAL UI: Non-blocking "Start" signal with structured data
+    asyncio.create_task(log_callback(
+        text="Starting tools...", 
+        node="act_start", 
+        data={"actions": actions}
+    ))
 
-    # 3. Parallel Tool Execution (The priority!) with timing
+    # 3. Parallel Tool Execution with timing
     loop = asyncio.get_event_loop()
     tasks = []
-    for act in action_strings:
-        # Wrap each tool call with timing
-        async def timed_tool_call(action):
+    for action in actions:
+        async def timed_tool_call(act):
+            if "error" in act:
+                return act["error"]
+                
             start_time = time.time()
-            result = await loop.run_in_executor(None, safe_execute_tool, action, TOOLS)
+            try:
+                result = await loop.run_in_executor(None, safe_execute_tool, act["original"], TOOLS)
+            except Exception as e:
+                result = f"Tool Execution Error: {str(e)}"
             end_time = time.time()
             tool_time = end_time - start_time
+            
             # Non-blocking log with timing
-            asyncio.create_task(log_callback(f"Tool '{action.split('(')[0]}' took {tool_time:.2f}s", node="act_tool", data={"action": action, "duration": tool_time}))
+            tool_display_name = act["name"].replace('_', ' ').capitalize()
+            asyncio.create_task(log_callback(
+                f"Tool '{tool_display_name}' took {tool_time:.2f}s", 
+                node="act", 
+                data={"tool": tool_display_name, "time": tool_time}
+            ))
             return result
 
-        tasks.append(timed_tool_call(act))
+        tasks.append(timed_tool_call(action))
 
     results = await asyncio.gather(*tasks)
 
-    # 4. SIGNAL UI: Non-blocking "Finish" signal
+    # 4. SIGNAL UI: Non-blocking "Finish" signal with structured results
     batch_results = []
     for i, res in enumerate(results):
         status = "ok" if not str(res).startswith("Error") else "error"
-        batch_results.append({"action": action_strings[i], "status": status})
+        batch_results.append({
+            "action": actions[i],  # Keep full structured action
+            "status": status,
+            "result": res
+        })
     
-    asyncio.create_task(log_callback(text="Batch complete.", node="act_finish", data={"results": batch_results}))
+    asyncio.create_task(log_callback(
+        text="Batch complete.", 
+        node="act_finish", 
+        data={"results": batch_results}
+    ))
 
     # 5. Build ToolMessages for the next reasoning step
     new_messages = [ToolMessage(content=str(r), tool_call_id=f"call_{uuid.uuid4().hex[:8]}") for r in results]
@@ -129,7 +187,6 @@ async def act_node(state: AgentState):
             topic_change_signal = r
             break
 
-    # If topic change, store it in state so run_agent_logic can return it
     if topic_change_signal:
         return {
             "messages": new_messages,

@@ -67,10 +67,26 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
         async with bot.ui_lock:
             data = data or {}
             if node == "act_start":
-                for action in data.get("actions", []): ui_state["active_tools"][action] = "⚙️"
+                for action in data.get("actions", []):
+                    if "error" in action:
+                        continue
+                    tool_name = action["name"].replace('_', ' ').capitalize()
+                    args_str = ", ".join(repr(arg) for arg in action["args"])
+                    if action["kwargs"]:
+                        kwargs_str = ", ".join(f"{k}={repr(v)}" for k, v in action["kwargs"].items())
+                        args_str = f"{args_str}, {kwargs_str}" if args_str else kwargs_str
+                    display_text = f"{tool_name}: {args_str}"
+                    ui_state["active_tools"][action["original"]] = {
+                        "display": display_text, 
+                        "status": "⚙️"
+                    }
             elif node == "act_finish":
+                #print(f"📥 Tools finished: {data}")
                 for item in data.get("results", []):
-                    ui_state["active_tools"][item["action"]] = "✅" if item["status"] == "ok" else "❌"
+                    action = item["action"]
+                    original_str = action.get("original", "")
+                    if original_str in ui_state["active_tools"]:
+                        ui_state["active_tools"][original_str]["status"] = "✅" if item["status"] == "ok" else "❌"
             elif node == "reason":
                 ui_state["thoughts"].append(text)
 
@@ -79,7 +95,7 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
             except: pass
 
             display_lines = [f"💭 {t}" for t in ui_state["thoughts"][-2:]]
-            display_lines += [f"{icon} {act}" for act, icon in ui_state["active_tools"].items()]
+            display_lines += [f"{tool_info['status']} {tool_info['display']}" for tool_info in ui_state["active_tools"].values()]
             if not display_lines: return
 
             html_body = f"<blockquote><font color='gray'>{'<br>'.join(display_lines)}</font></blockquote>"
@@ -93,7 +109,8 @@ async def run_agent_turn(bot, room, thread_root_id, sender_name, clean_body, eve
                 msg_content["m.relates_to"] = {"rel_type": "m.replace", "event_id": ui_state["log_event_id"]}
 
             resp = await bot.client.room_send(room.room_id, "m.room.message", content=msg_content, ignore_unverified_devices=True)
-            if not ui_state["log_event_id"]: ui_state["log_event_id"] = resp.event_id
+            if not ui_state["log_event_id"]: 
+                ui_state["log_event_id"] = resp.event_id
 
     try:
         # Get history and filter out any thread migration messages
