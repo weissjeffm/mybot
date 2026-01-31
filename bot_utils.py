@@ -25,8 +25,9 @@ Spoken summary: The server temperatures are normal.
 
 Do NOT include phrases like: "The message states that", or "the message goes on to say", that's not first person.
 Original response:
+```    
 {response_text}
-
+```
 Concise spoken summary:"""
     
     try:
