@@ -32,10 +32,20 @@ def scrape_url(url: str):
                 text = trafilatura.extract(response.text, include_comments=False, include_tables=True, include_links=True)
                 if text:
                     result["status"] = "ok"
-                    result["result"] = text
-                    result["message"] = f"Extracted text from page"
+                    result["message"] = f"Extracted and summarized text from page"
+                    result["result"] = {
+                        "url": url,
+                        "summary": text,
+                        "citation": f"[{url}]({url})"
+                    }
                 else:
                     result["message"] = "No extractable text found."
+                    result["result"] = {
+                        "url": url,
+                        "error": result["message"],
+                        "summary": f"Failed to scrape {url}: {result['message']}",
+                        "citation": f"[{url}]({url})"
+                    }
         else:
             result["message"] = f"HTTP Error: {response.status_code}"
                 
@@ -46,4 +56,10 @@ def scrape_url(url: str):
     except Exception as e:
         result["message"] = f"Exception: {str(e)}"
     
-    return result
+    final_result = {
+        "url": url,
+        "error": result["message"],
+        "summary": f"Failed to scrape {url}: {result['message']}",
+        "citation": f"[{url}]({url})"
+    }
+    return final_result
