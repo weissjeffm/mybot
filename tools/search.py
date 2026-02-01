@@ -5,11 +5,11 @@ def search_web(query: str, max_results=15):
     """
     Searches the web using DuckDuckGo.
     How to search:
-       - Do not stuff too many keywords into the search query, you must choose searches where all the terms could appear in one document.
-       - Bad: "UBI trials robot tax". Good: "UBI trials", then separately "robot tax".
+       - Use search terms that differentiate - think 'what terms would the desired documents *have* to mention?'.  Don't simply use words from the user's question. If user asks "what is the latest firmware for my router", and has previously told you the model is BA2121, ❌ Avoid: "latest firmware my router". ✅ Use: "router model 2121 firmware download".  
+       - Do not stuff too many keywords into the search query. ❌ Avoid: "UBI trials robot tax". ✅ Use: "UBI trials", then separately "robot tax".
        - Use quotes around a word or phrase, if the document should contain that exact term. Example: '"Los Angeles" 1991 riots'. (use single quotes around the whole search term, if using double quotes inside)
        - If a search returns no results, try again with fewer words.
-       - IMPORTANT: The search results contain summaries, but they are only to be used to decide the *relevance* of that page to what you are looking for. Summaries are NOT the actual content. To get the content, call the scrape_webpage tool and pass it the URL of the search result. Do not call the search tool more than 3 times in a row.
+       - IMPORTANT: The search results contain summaries, but they are only to be used to decide the *relevance* of that page to what you are looking for. Summaries are NOT the actual content. To get the content, call the scrape tool and pass it the URL of the search result. Do not call the search tool more than 3 times in a row.
     """
     print(f"DEBUG: Searching for '{query}'") # Visible in bridge logs
 
