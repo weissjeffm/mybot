@@ -13,31 +13,39 @@ def should_send_audio(response_text: str) -> bool:
 async def filter_search_results(results: list, history: str, llm) -> list:
     """
     Filter search results based on relevance to conversation history using fast LLM.
-    Returns only relevant results.
+    Returns only relevant results using index-based filtering.
     """
     if not results or not history or not llm:
         return results
-        
-    filter_prompt = f"""Analyze the following search results and filter out any that are NOT relevant to the conversation context. 
-    Keep results that could help answer the user's question or provide useful information.
-    Return ONLY the relevant results as a JSON array with the same structure (title, url, snippet).
+    
+    # Create numbered list of titles and snippets for the LLM
+    numbered_items = []
+    for i, result in enumerate(results):
+        title = result.get('title', 'No Title')
+        snippet = result.get('snippet', 'No snippet available')
+        numbered_items.append(f"{i}. {title}: {snippet}")
+    
+    filter_prompt = f"""Analyze the following search results in context of the conversation and return ONLY the indices (0-based) of the results that are relevant.
+    Keep only results that could help answer the user's question.
     
     Conversation context:
     {history}
     
-    Search results to filter:
-    {json.dumps(results, indent=2)}
+    Search results (index. title: snippet):
+    {" | ".join(numbered_items)}
     
-    Return only the relevant results as a JSON array. Do not include any other text."""
+    Return ONLY a valid Python list of integers (e.g., [1, 2, 4]). Do not include any other text."""
     
     try:
         response = await llm.ainvoke([{"role": "user", "content": filter_prompt}])
-        # Extract JSON array from response
+        # Extract list from response
         import re
-        json_match = re.search(r'\[.*\]', response.content.strip(), re.DOTALL)
-        if json_match:
-            filtered_results = json.loads(json_match.group())
-            return filtered_results
+        list_match = re.search(r'\[[\d,\s]*\]', response.content.strip())
+        if list_match:
+            indices = eval(list_match.group())
+            # Validate indices are integers and within range
+            valid_indices = [int(i) for i in indices if isinstance(i, int) and 0 <= i < len(results)]
+            return [results[i] for i in valid_indices]
         return results  # Return original if parsing fails
     except Exception as e:
         print(f"⚠️ Failed to filter search results: {e}")

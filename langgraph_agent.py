@@ -151,26 +151,14 @@ async def fold_node(state: AgentState):
         elif isinstance(m, ToolMessage) and "search_web" in m.tool_call_id:
             try:
                 results = json.loads(m.content)
-                if isinstance(results, dict) and "result" in results:
+                if isinstance(results, dict) and "result" in results and isinstance(results["result"], list):
                     # Create context from conversation history
                     context = "\n".join([f"{msg.type}: {msg.content}" for msg in state["messages"][-5:] if isinstance(msg, (HumanMessage, AIMessage))])
                     
-                    filter_prompt = f"""Analyze the search results in context of this conversation and filter out any that are NOT relevant. 
-                    Keep only results that could help answer the user's question.
+                    # Use the utility function to filter results
+                    filtered_results = await filter_search_results(results["result"], context, fast_llm)
                     
-                    Conversation context:
-                    {context}
-                    
-                    Search results:
-                    {json.dumps(results['result'], indent=2)}
-                    
-                    Return ONLY a valid JSON array with the same structure (title, url, snippet) for relevant results only."""
-                    
-                    response = await fast_llm.ainvoke([{"role": "user", "content": filter_prompt}])
-                    import re
-                    json_match = re.search(r'\[.*\]', response.content.strip(), re.DOTALL)
-                    if json_match:
-                        filtered_results = json.loads(json_match.group())
+                    if len(filtered_results) != len(results["result"]):
                         updated_result = results.copy()
                         updated_result["result"] = filtered_results
                         updated_result["message"] = f"Found {len(filtered_results)} relevant results after filtering"
@@ -181,7 +169,7 @@ async def fold_node(state: AgentState):
                             id=m.id
                         ))
                     else:
-                        new_messages.append(m) # Keep original if parsing fails
+                        new_messages.append(m)  # No change, keep original
                 else:
                     new_messages.append(m)
             except Exception as e:
