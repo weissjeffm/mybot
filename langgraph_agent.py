@@ -110,19 +110,33 @@ async def act_node(state: AgentState):
     if not actions:
         return {"messages": [ToolMessage(content="No actions found", tool_call_id="err")]}
 
-    # Parallel Execution with Semaphore to prevent SEGVs/VRAM spikes
-    sem = asyncio.Semaphore(5)
-    loop = asyncio.get_event_loop()
-
+    # Parallel Execution - handle async functions directly in the event loop
     async def run_tool(act):
-        async with sem:
-            if "error" in act: return act["error"]
-            try:
-                # Use a unique ID for the tool message so we can 'fold' it later
-                res = await loop.run_in_executor(None, safe_execute_tool, act["original"], TOOLS)
-                return ToolMessage(content=str(res), tool_call_id=f"call_{act['id'][:8]}", id=act['id'])
-            except Exception as e:
-                return ToolMessage(content=f"Error: {str(e)}", tool_call_id="err", id=act['id'])
+        if "error" in act: 
+            return ToolMessage(content=act["error"], tool_call_id="err", id=act['id'])
+        try:
+            # Get the tool function
+            tool_func = TOOLS[act["name"]]
+            # Check if it's async
+            if asyncio.iscoroutinefunction(tool_func):
+                # Run async function directly in event loop
+                result = await tool_func(*act["args"], **act["kwargs"])
+            else:
+                # Run sync function in thread pool
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, tool_func, *act["args"], **act["kwargs"])
+                
+            return ToolMessage(
+                content=str(result), 
+                tool_call_id=f"call_{act['id'][:8]}", 
+                id=act['id']
+            )
+        except Exception as e:
+            return ToolMessage(
+                content=f"Error: {str(e)}", 
+                tool_call_id="err", 
+                id=act['id']
+            )
 
     results = await asyncio.gather(*[run_tool(a) for a in actions])
     return {"messages": results, "current_thought": "Tools complete."}
@@ -247,55 +261,3 @@ async def run_agent_logic(initial_state: AgentState):
         "topic_change": topic_change_signal
     }
 
-import ast
-
-def safe_execute_tool(action_str: str, available_tools: dict):
-    try:
-        # If the LLM includes noise, ast.parse will throw a SyntaxError here
-        # which we return as a result so the LLM knows it messed up.
-        tree = ast.parse(action_str.strip(), mode='eval')
-        
-        if not isinstance(tree.body, ast.Call):
-            return "Error: Your action must be a pure function call. Do not add conversational text."
-        
-        func_name = tree.body.func.id
-        if func_name not in available_tools:
-            return f"Error: Tool '{func_name}' does not exist. Did you hallucinate it?"
-
-        # Extract arguments...
-        args = []
-        for arg in tree.body.args:
-            if isinstance(arg, ast.Constant): args.append(arg.value)
-            else: return f"Error: Argument {ast.dump(arg)} is not a literal."
-            
-        kwargs = {}
-        for kw in tree.body.keywords:
-            if isinstance(kw.value, ast.Constant): kwargs[kw.arg] = kw.value.value
-            else: return f"Error: Keyword {kw.arg} is not a literal."
-
-        print(f"🔧 Executing tool: {func_name}({', '.join(repr(a) for a in args)}{', ' + ', '.join(f'{k}={repr(v)}' for k, v in kwargs.items()) if kwargs else ''})")
-        
-        # ACTUALLY CALLING THE TOOL
-        result = available_tools[func_name](*args, **kwargs)
-        
-        # Handle async functions
-        if asyncio.iscoroutine(result):
-            # Run the coroutine in the event loop
-            loop = asyncio.get_event_loop()
-            result = loop.run_until_complete(result)
-        
-        print(f"✅ Tool {func_name} completed")
-        if result is not None:
-            result_str = str(result)
-            print(f"   ↳ {result_str[:200]}{'...' if len(result_str) > 200 else ''}")
-        return result
-
-    except SyntaxError:
-        print(f"    [ERROR] Syntax error in action string.")
-        print(f"❌ Syntax error in tool call: {action_str[:100]}")
-        return f"Error: Syntax error in '{action_str}'. Ensure you only output the function call."
-    except Exception as e:
-        print(f"    [ERROR] Tool execution failed: {str(e)}")
-        print(f"    [ERROR] Tool execution failed: {str(e)}")
-        print(f"❌ Tool {func_name} failed: {str(e)[:200]}")
-        return f"Tool Execution Error: {str(e)}"
