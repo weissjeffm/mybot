@@ -10,6 +10,7 @@ from langchain_core.messages import ToolMessage, SystemMessage, HumanMessage, Ba
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import StateGraph, END
 from tools import get_tools_dict, generate_system_prompt
+from bot_utils import filter_search_results
 
 # --- 1. SMART REDUCER ---
 def reduce_messages(left: List[BaseMessage], right: Union[BaseMessage, List[BaseMessage]]):
