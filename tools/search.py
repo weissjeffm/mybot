@@ -40,8 +40,26 @@ def search_web(query: str, max_results=15):
                     })
                 result["status"] = "ok"
                 result["code"] = 200
-                result["message"] = f"Found {len(search_results)} results for '{query}'"
                 result["result"] = cleaned_results
+                
+                # Filter results for relevance using fast LLM
+                try:
+                    from langgraph_agent import fast_llm
+                    from bot_utils import filter_search_results
+                    
+                    # Create a context string from the search query
+                    context = f"User is searching for information about: {query}"
+                    
+                    if fast_llm:
+                        print("🔍 Filtering search results for relevance...")
+                        filtered_results = await filter_search_results(cleaned_results, context, fast_llm)
+                        result["result"] = filtered_results
+                        result["message"] = f"Found {len(filtered_results)} relevant results after filtering"
+                    else:
+                        result["message"] = f"Found {len(cleaned_results)} results for '{query}'"
+                except Exception as e:
+                    result["message"] = f"Found {len(cleaned_results)} results for '{query}'"
+                    print(f"⚠️ Failed to filter results: {e}")
             else:
                 result["code"] = 404
                 result["message"] = "No results found for this query."

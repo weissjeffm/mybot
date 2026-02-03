@@ -1,8 +1,49 @@
+import json
 from io import BytesIO
 from nio import RoomMessageText, UploadResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 def should_send_audio(response_text: str) -> bool:
+    """
+    Determine if an audio version should be sent based on response length.
+    Returns True for responses over 100 characters.
+    """
+    return len(response_text.strip()) > 100
+
+async def filter_search_results(results: list, history: str, llm) -> list:
+    """
+    Filter search results based on relevance to conversation history using fast LLM.
+    Returns only relevant results.
+    """
+    if not results or not history or not llm:
+        return results
+        
+    filter_prompt = f"""Analyze the following search results and filter out any that are NOT relevant to the conversation context. 
+    Keep results that could help answer the user's question or provide useful information.
+    Return ONLY the relevant results as a JSON array with the same structure (title, url, snippet).
+    
+    Conversation context:
+    {history}
+    
+    Search results to filter:
+    {json.dumps(results, indent=2)}
+    
+    Return only the relevant results as a JSON array. Do not include any other text."""
+    
+    try:
+        response = await llm.ainvoke([{"role": "user", "content": filter_prompt}])
+        # Extract JSON array from response
+        import re
+        json_match = re.search(r'\[.*\]', response.content.strip(), re.DOTALL)
+        if json_match:
+            filtered_results = json.loads(json_match.group())
+            return filtered_results
+        return results  # Return original if parsing fails
+    except Exception as e:
+        print(f"⚠️ Failed to filter search results: {e}")
+        return results
+
+async def summarize_for_audio(response_text: str, llm) -> str:
     """
     Determine if an audio version should be sent based on response length.
     Returns True for responses over 100 characters.
