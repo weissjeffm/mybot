@@ -278,6 +278,12 @@ def safe_execute_tool(action_str: str, available_tools: dict):
         # ACTUALLY CALLING THE TOOL
         result = available_tools[func_name](*args, **kwargs)
         
+        # Handle async functions
+        if asyncio.iscoroutine(result):
+            # Run the coroutine in the event loop
+            loop = asyncio.get_event_loop()
+            result = loop.run_until_complete(result)
+        
         print(f"✅ Tool {func_name} completed")
         if result is not None:
             result_str = str(result)
