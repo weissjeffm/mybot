@@ -1,7 +1,7 @@
 from ddgs import DDGS
 import json
 
-def search_web(query: str, max_results=15):
+async def search_web(query: str, max_results=15):
     """
     Searches the web using DuckDuckGo.
     How to search:
