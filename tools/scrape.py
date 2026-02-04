@@ -10,20 +10,30 @@ def scrape_url(url: str):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
+    result = {
+        "status": "error",
+        "code": 0,
+        "message": "Scrape failed to initiate",
+        "result": None,
+        "type": "scrape"       
+    }
+    
     try:
         response = requests.get(url, headers=headers, timeout=15)
-        
+        result["code"] = response.status_code
         if response.status_code != 200:
-            raise Exception(f"HTTP {response.status_code}: Failed to fetch page")
-
+            result["message"] = "Failed to fetch page, HTTP error"
+            
         if "Please complete the security check" in response.text:
-            raise Exception("Blocked by CAPTCHA/Cloudflare")
+            result["message"] = "Blocked by CAPTCHA/Cloudflare"
 
         text = trafilatura.extract(response.text, include_comments=False, include_tables=True, include_links=True)
         if not text:
-            raise Exception("No extractable text found")
+            result["message"] = "No extractable text found"
 
-        return text  # ←← Return raw text only
-
+        result["status"] = "ok"
+        result["result"] = text
+        result["message"] = "Page retrieved"
+        return result
     except Exception as e:
-        raise Exception(f"Failed to scrape {url}: {str(e)}")
+        return result

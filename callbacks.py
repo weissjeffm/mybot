@@ -3,19 +3,6 @@ import asyncio
 import markdown
 import traceback
 from langchain_core.messages import HumanMessage
-
-# Suppress verbose Matrix SDK schema validation warnings
-logging.getLogger("matrix").setLevel(logging.ERROR)
-logging.getLogger("matrix_client").setLevel(logging.ERROR)
-
-class MatrixSchemaFilter(logging.Filter):
-    def filter(self, record):
-        return 'Error validating event' not in record.getMessage()
-
-# Apply filter to all matrix-related loggers
-for logger_name in ['matrix', 'matrix_client', '']:
-    logger = logging.getLogger(logger_name)
-    logger.addFilter(MatrixSchemaFilter())
 from langgraph_agent import run_agent_logic, set_llm_instance
 import langgraph_agent
 from media_utils import extract_audio_bytes, transcribe_audio, text_to_speech

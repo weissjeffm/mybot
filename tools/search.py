@@ -17,7 +17,8 @@ async def search_web(query: str, max_results=15):
         "status": "error",
         "code": 0,
         "message": "Search failed to initiate",
-        "result": []
+        "result": [],
+        "type": "search"       
     }
     
     try:

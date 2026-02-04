@@ -25,7 +25,7 @@ async def filter_search_results(results: list, history: str, llm) -> list:
         snippet = result.get('snippet', 'No snippet available')
         numbered_items.append(f"{i}. {title}: {snippet}")
     
-    filter_prompt = f"""Analyze the following search results in context of the conversation and return ONLY the indices (0-based) of the results that are relevant.
+    filter_prompt = f"""Analyze the following search results in context of the conversation and return ONLY the indices (0-based) of the results that are likely relevant.
     Keep only results that could help answer the user's question.
     
     Conversation context:

@@ -112,6 +112,7 @@ async def act_node(state: AgentState):
 
     # Parallel Execution - handle async functions directly in the event loop
     async def run_tool(act):
+        print(f"🔨 Running tool: {act}")
         if "error" in act: 
             return ToolMessage(content=act["error"], tool_call_id="err", id=act['id'])
         try:
@@ -125,20 +126,27 @@ async def act_node(state: AgentState):
                 # Run sync function in thread pool
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, tool_func, *act["args"], **act["kwargs"])
-                
+            content = str(result)
+            print(f"✅🔨 Tool call complete: {content[:120]}{'...' if len(content) > 120 else ''}")
             return ToolMessage(
-                content=str(result), 
+                content=content, 
                 tool_call_id=f"call_{act['id'][:8]}", 
-                id=act['id']
+                id=act['id'],
+                artifact=result
             )
         except Exception as e:
+            content = str(e)
+            print(f"❌🔨 Tool call failed: {content[:120]}{'...' if len(content) > 120 else ''}")
             return ToolMessage(
                 content=f"Error: {str(e)}", 
                 tool_call_id="err", 
-                id=act['id']
+                id=act['id'],
+                artifact=e
             )
 
     results = await asyncio.gather(*[run_tool(a) for a in actions])
+    m = str(results)
+
     return {"messages": results, "current_thought": "Tools complete."}
 
 async def fold_node(state: AgentState):
@@ -147,51 +155,58 @@ async def fold_node(state: AgentState):
     new_messages = []
     
     for m in state["messages"]:
-        # Fold any tool result larger than 3000 chars
-        if isinstance(m, ToolMessage) and len(m.content) > 3000:
-            asyncio.create_task(log_callback(f"Folding bulky result ({len(m.content)} chars)...", node="fold"))
-            
-            summary = await fast_llm.ainvoke([
-                SystemMessage(content="Summarize this content into technical bullet points. Only include details relevant to the conversation history."),
-                HumanMessage(content=m.content[:12000]) # Safety cap
-            ])
-            
-            new_messages.append(ToolMessage(
-                content=f"[FOLDED SUMMARY]: {summary.content}",
-                tool_call_id=m.tool_call_id,
-                id=m.id
-            ))
         
-        # Filter search results for relevance
-        elif isinstance(m, ToolMessage) and "search_web" in m.tool_call_id:
-            try:
-                results = json.loads(m.content)
-                if isinstance(results, dict) and "result" in results and isinstance(results["result"], list):
-                    # Create context from conversation history
-                    context = "\n".join([f"{msg.type}: {msg.content}" for msg in state["messages"][-5:] if isinstance(msg, (HumanMessage, AIMessage))])
-                    
-                    # Use the utility function to filter results
-                    filtered_results = await filter_search_results(results["result"], context, fast_llm)
-                    
-                    if len(filtered_results) != len(results["result"]):
-                        updated_result = results.copy()
-                        updated_result["result"] = filtered_results
-                        updated_result["message"] = f"Found {len(filtered_results)} relevant results after filtering"
-                        
-                        new_messages.append(ToolMessage(
-                            content=json.dumps(updated_result),
-                            tool_call_id=m.tool_call_id,
-                            id=m.id
-                        ))
+        
+        # Fold any tool result larger than 3000 chars
+        
+        if isinstance(m, ToolMessage):
+            result = m.artifact
+            tool_type = result and result.get("type", "")
+            if tool_type == "scrape" and len(m.content) > 3000:
+                asyncio.create_task(log_callback(f"Folding bulky result ({len(m.content)} chars)...", node="fold"))
+            
+                summary = await fast_llm.ainvoke([
+                    SystemMessage(content="Summarize this content. Only include details relevant to the conversation history."),
+                    HumanMessage(content=m.content[:12000]) # Safety cap
+                ])
+            
+                new_messages.append(ToolMessage(
+                    content=f"[FOLDED SUMMARY]: {summary.content}",
+                    tool_call_id=m.tool_call_id,
+                    id=m.id
+                ))
+        
+            # Filter search results for relevance
+            elif tool_type == "search":
+                try:
+                    if result.get("status") == "ok":
+                        search_results = result.get("result")
+
+                        # Create context from conversation history
+                        context = "\n".join([f"{msg.type}: {msg.content}" for msg in state["messages"][-5:] if isinstance(msg, (HumanMessage, AIMessage))])
+
+                        # Use the utility function to filter results
+                        filtered_results = await filter_search_results(search_results, context, fast_llm)
+
+                        if len(filtered_results) != len(search_results):
+                            
+                            result["result"] = filtered_results
+                            result["message"] = f"Found {len(filtered_results)} relevant results after filtering"
+
+                            new_messages.append(ToolMessage(
+                                content=str(result),
+                                tool_call_id=m.tool_call_id,
+                                id=m.id
+                            ))
+                        else:
+                            new_messages.append(m)  # No change, keep original
                     else:
-                        new_messages.append(m)  # No change, keep original
-                else:
+                        new_messages.append(m)
+                except Exception as e:
+                    print(f"⚠️ Failed to filter search results: {e}")
                     new_messages.append(m)
-            except Exception as e:
-                print(f"⚠️ Failed to filter search results: {e}")
+            else:
                 new_messages.append(m)
-        else:
-            new_messages.append(m)
 
     return {"messages": new_messages} if new_messages else {}
 

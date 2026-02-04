@@ -16,7 +16,9 @@ def signal_topic_change(subject: str):
     # Returns a JSON signal that bridge.py will intercept
     return {
         "status": "ok",
+        "type": "topic_change",
         "event": "TOPIC_CHANGE",
         "topic": subject
+        
         # Remove 'message' - let the AI generate the reply naturally
     }
