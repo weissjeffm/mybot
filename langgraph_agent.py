@@ -110,6 +110,9 @@ async def act_node(state: AgentState):
     if not actions:
         return {"messages": [ToolMessage(content="No actions found", tool_call_id="err")]}
 
+    # Signal that tool execution is starting
+    await log_callback("Tools started", node="act_start", data={"actions": actions})
+
     # Parallel Execution - handle async functions directly in the event loop
     async def run_tool(act):
         print(f"🔨 Running tool: {act}")
@@ -146,7 +149,7 @@ async def act_node(state: AgentState):
 
     results = await asyncio.gather(*[run_tool(a) for a in actions])
     await log_callback("Tools completed", node="act_finish", data={"results": [
-        {"action": action, "status": "ok" if "Error:" not in result.content else "error"}
+        {"action": {"original": action["original"]}, "status": "ok" if "Error:" not in result.content else "error"}
         for action, result in zip(actions, results)
     ]})
 
