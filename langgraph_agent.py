@@ -145,8 +145,10 @@ async def act_node(state: AgentState):
             )
 
     results = await asyncio.gather(*[run_tool(a) for a in actions])
-    m = str(results)
-    await log_callback("Tools completed", node="act_finish", data={"results": results})
+    await log_callback("Tools completed", node="act_finish", data={"results": [
+        {"action": action, "status": "ok" if "Error:" not in result.content else "error"}
+        for action, result in zip(actions, results)
+    ]})
 
     return {"messages": results, "current_thought": "Tools complete."}
 
