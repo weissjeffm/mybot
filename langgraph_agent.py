@@ -195,7 +195,8 @@ async def fold_node(state: AgentState):
                         filtered_results = await filter_search_results(search_results, context, fast_llm)
 
                         if len(filtered_results) != len(search_results):
-                            
+                            # Log the filtering result to stdout
+                            print(f"🗑️ {len(search_results) - len(filtered_results)}/{len(search_results)} search results filtered out. {len(filtered_results)} kept.")
                             result["result"] = filtered_results
                             result["message"] = f"Found {len(filtered_results)} relevant results after filtering"
 
