@@ -102,33 +102,55 @@ async def get_display_name(bot, user_id):
     except:
         return user_id
 
-async def get_structured_history(bot, room_id, thread_root_id, limit=30):
-    """Fetches history as LangChain message objects."""
-    response = await bot.client.room_messages(room_id, limit=limit)
-    if not response.chunk: 
+from nio import RoomMessageText, RoomGetEventError
+from langchain_core.messages import AIMessage, HumanMessage
+
+async def get_structured_history(bot, room_id, thread_root_id, limit=50):
+    """Fetches history specifically for a thread using the Relations API."""
+    
+    # We must use the FULL path starting with /_matrix/
+    path = f"/_matrix/client/v1/rooms/{room_id}/relations/{thread_root_id}/m.thread?limit={limit}"
+    headers = {"Authorization": f"Bearer {bot.client.access_token}"}
+    
+    # 2. Use _send with manual headers
+    # nio _send signature: (method, path, data=b"", headers=None, content_type="application/json")
+    resp = await bot.client.send("GET", path, headers=headers)    
+    
+    # nio's _send returns a response object where status is .status
+    if resp.status != 200:
+        print(f"Failed to fetch thread relations: Status {resp.status}")
         return []
 
+    # Await the json coroutine from the aiohttp response
+    data = await resp.json()
+    raw_events = data.get("chunk", [])
+
+    # Fetch the root message
+    root_resp = await bot.client.room_get_event(room_id, thread_root_id)
+    if not isinstance(root_resp, RoomGetEventError):
+        raw_events.append(root_resp.event.source)
+
+    # Sort chronologically
+    raw_events.sort(key=lambda x: x.get("origin_server_ts", 0))
+
     messages = []
-    for event in response.chunk:
-        if not isinstance(event, RoomMessageText): 
+    for event_dict in raw_events:
+        content = event_dict.get('content', {})
+        body = content.get('body', '')
+        sender = event_dict.get('sender')
+        
+        if "⚙️" in body or content.get("msgtype") == "m.notice" or not body:
             continue
 
-        relates = event.source.get('content', {}).get('m.relates_to', {})
-        parent_id = relates.get('event_id')
+        if sender == bot.client.user_id:
+            messages.append(AIMessage(content=body))
+        else:
+            # Assumes you have a get_display_name helper defined
+            sender_name = await get_display_name(bot, sender)
+            messages.append(HumanMessage(content=f"{sender_name}: {body}"))
 
-        if event.event_id == thread_root_id or parent_id == thread_root_id:
-            # Filter out tool logs and status notices
-            if "⚙️" in event.body or event.source.get("msgtype") == "m.notice":
-                continue
-
-            if event.sender == bot.client.user_id:
-                messages.append(AIMessage(content=event.body))
-            else:
-                sender_name = await get_display_name(bot, event.sender)
-                messages.append(HumanMessage(content=f"{sender_name}: {event.body}"))
-
-    messages.reverse() 
     return messages
+
 
 from nio import UploadResponse
 
